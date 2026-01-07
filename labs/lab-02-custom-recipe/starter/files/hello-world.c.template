@@ -1,0 +1,20 @@
+/*
+ * Hello World - Yocto Recipe Example
+ *
+ * TODO: Complete this simple C program
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(int argc, char *argv[])
+{
+    // TODO: Print a welcome message
+    printf("TODO: Add your message\n");
+
+    // TODO: Print system information (optional)
+
+    // TODO: Handle command-line arguments (optional)
+
+    return 0;
+}

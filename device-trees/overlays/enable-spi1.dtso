@@ -1,0 +1,334 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Device Tree Overlay: Enable SPI1 on Jetson Orin
+ *
+ * Description: This overlay enables SPI1 controller on the 40-pin expansion header
+ *              Configures clock frequency, chip selects, and pinmux settings
+ * Target: NVIDIA Jetson Orin (tegra234)
+ *
+ * Usage:
+ *   1. Compile: dtc -@ -I dts -O dtb -o enable-spi1.dtbo enable-spi1.dtso
+ *   2. Apply: Add to /boot/extlinux/extlinux.conf
+ *      FDTOVERLAYS /boot/overlays/enable-spi1.dtbo
+ *
+ * Hardware Requirements:
+ *   - Jetson Orin 40-pin header
+ *   - SPI peripheral device (sensors, displays, flash, etc.)
+ *
+ * Pin Assignments:
+ *   - Pin 19 (GPIO10): SPI1_MOSI (Master Out Slave In)
+ *   - Pin 21 (GPIO09): SPI1_MISO (Master In Slave Out)
+ *   - Pin 23 (GPIO11): SPI1_SCK  (Serial Clock)
+ *   - Pin 24 (GPIO08): SPI1_CS0  (Chip Select 0)
+ *   - Pin 26 (GPIO07): SPI1_CS1  (Chip Select 1 - Optional)
+ *
+ * After loading:
+ *   - Devices appear as /dev/spidev1.0 and /dev/spidev1.1
+ *   - Default clock: 12 MHz
+ *   - SPI Mode: 0 (CPOL=0, CPHA=0)
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    /* Compatible string for Jetson Orin platforms */
+    compatible = "nvidia,p3768-0000+p3767-0000", "nvidia,tegra234";
+
+    /*
+     * Fragment 0: Configure pinmux for SPI1 MOSI
+     * Sets GPIO10 (Pin 19) to SPI1_MOSI function
+     */
+    fragment@0 {
+        target = <&pinmux>;
+        __overlay__ {
+            spi1_mosi_pz5 {
+                nvidia,pins = "spi1_mosi_pz5";
+                nvidia,function = "spi1";
+                nvidia,pull = <0>;  /* TEGRA_PIN_PULL_NONE */
+                nvidia,tristate = <0>;  /* TEGRA_PIN_DISABLE */
+                nvidia,enable-input = <1>;  /* TEGRA_PIN_ENABLE - bidirectional */
+            };
+        };
+    };
+
+    /*
+     * Fragment 1: Configure pinmux for SPI1 MISO
+     * Sets GPIO09 (Pin 21) to SPI1_MISO function
+     */
+    fragment@1 {
+        target = <&pinmux>;
+        __overlay__ {
+            spi1_miso_pz4 {
+                nvidia,pins = "spi1_miso_pz4";
+                nvidia,function = "spi1";
+                nvidia,pull = <1>;  /* TEGRA_PIN_PULL_DOWN */
+                nvidia,tristate = <1>;  /* TEGRA_PIN_ENABLE */
+                nvidia,enable-input = <1>;  /* TEGRA_PIN_ENABLE */
+            };
+        };
+    };
+
+    /*
+     * Fragment 2: Configure pinmux for SPI1 SCK
+     * Sets GPIO11 (Pin 23) to SPI1_SCK function
+     */
+    fragment@2 {
+        target = <&pinmux>;
+        __overlay__ {
+            spi1_sck_pz3 {
+                nvidia,pins = "spi1_sck_pz3";
+                nvidia,function = "spi1";
+                nvidia,pull = <0>;  /* TEGRA_PIN_PULL_NONE */
+                nvidia,tristate = <0>;  /* TEGRA_PIN_DISABLE */
+                nvidia,enable-input = <1>;  /* TEGRA_PIN_ENABLE */
+            };
+        };
+    };
+
+    /*
+     * Fragment 3: Configure pinmux for SPI1 CS0
+     * Sets GPIO08 (Pin 24) to SPI1_CS0 function
+     */
+    fragment@3 {
+        target = <&pinmux>;
+        __overlay__ {
+            spi1_cs0_pz6 {
+                nvidia,pins = "spi1_cs0_pz6";
+                nvidia,function = "spi1";
+                nvidia,pull = <2>;  /* TEGRA_PIN_PULL_UP */
+                nvidia,tristate = <0>;  /* TEGRA_PIN_DISABLE */
+                nvidia,enable-input = <1>;  /* TEGRA_PIN_ENABLE */
+            };
+        };
+    };
+
+    /*
+     * Fragment 4: Configure pinmux for SPI1 CS1
+     * Sets GPIO07 (Pin 26) to SPI1_CS1 function
+     */
+    fragment@4 {
+        target = <&pinmux>;
+        __overlay__ {
+            spi1_cs1_pz7 {
+                nvidia,pins = "spi1_cs1_pz7";
+                nvidia,function = "spi1";
+                nvidia,pull = <2>;  /* TEGRA_PIN_PULL_UP */
+                nvidia,tristate = <0>;  /* TEGRA_PIN_DISABLE */
+                nvidia,enable-input = <1>;  /* TEGRA_PIN_ENABLE */
+            };
+        };
+    };
+
+    /*
+     * Fragment 5: Enable and configure SPI1 controller
+     * This is the main SPI device configuration
+     */
+    fragment@5 {
+        target = <&spi1>;
+        __overlay__ {
+            /* Enable the SPI device */
+            status = "okay";
+
+            /* SPI bus properties */
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            /*
+             * SPI controller clock frequency
+             * Maximum: 65 MHz for Tegra234
+             * Default: 12 MHz for compatibility
+             */
+            spi-max-frequency = <12000000>;  /* 12 MHz */
+
+            /*
+             * Number of chip selects available
+             */
+            num-cs = <2>;
+
+            /*
+             * Compatible string for driver matching
+             */
+            compatible = "nvidia,tegra234-spi";
+
+            /*
+             * SPI Device 0 on CS0 (Generic spidev for userspace access)
+             * Remove this and add specific device if using a real SPI peripheral
+             */
+            spidev0: spidev@0 {
+                compatible = "rohm,dh2228fv";  /* Generic spidev compatible */
+                reg = <0>;  /* Chip select 0 */
+                spi-max-frequency = <12000000>;  /* 12 MHz */
+
+                /*
+                 * SPI mode configuration:
+                 * Mode 0: CPOL=0, CPHA=0 (default)
+                 * Mode 1: CPOL=0, CPHA=1
+                 * Mode 2: CPOL=1, CPHA=0
+                 * Mode 3: CPOL=1, CPHA=1
+                 */
+                spi-cpol;  /* Uncomment for CPOL=1 */
+                /* spi-cpha; */  /* Uncomment for CPHA=1 */
+
+                /*
+                 * Chip select polarity
+                 * Default: active low
+                 */
+                /* spi-cs-high; */  /* Uncomment for active high CS */
+
+                /*
+                 * Bits per word (usually 8)
+                 */
+                spi-bits-per-word = <8>;
+            };
+
+            /*
+             * SPI Device 1 on CS1 (Generic spidev for userspace access)
+             * Remove this and add specific device if using a real SPI peripheral
+             */
+            spidev1: spidev@1 {
+                compatible = "rohm,dh2228fv";  /* Generic spidev compatible */
+                reg = <1>;  /* Chip select 1 */
+                spi-max-frequency = <12000000>;  /* 12 MHz */
+                spi-bits-per-word = <8>;
+            };
+
+            /*
+             * Example: Replace spidev with a real SPI device
+             * Uncomment and modify for your specific hardware
+             */
+            /*
+            spi_flash: flash@0 {
+                compatible = "jedec,spi-nor";
+                reg = <0>;
+                spi-max-frequency = <25000000>;
+                m25p,fast-read;
+
+                partitions {
+                    compatible = "fixed-partitions";
+                    #address-cells = <1>;
+                    #size-cells = <1>;
+
+                    partition@0 {
+                        label = "bootloader";
+                        reg = <0x0 0x100000>;
+                        read-only;
+                    };
+
+                    partition@100000 {
+                        label = "data";
+                        reg = <0x100000 0xf00000>;
+                    };
+                };
+            };
+            */
+        };
+    };
+};
+
+/*
+ * Testing the SPI:
+ * ================
+ *
+ * 1. Check devices exist:
+ *    ls -l /dev/spidev1.*
+ *    # Should show /dev/spidev1.0 and /dev/spidev1.1
+ *
+ * 2. Verify SPI controller:
+ *    cat /sys/class/spi_master/spi1/device/modalias
+ *
+ * 3. Test with spidev_test (kernel tools):
+ *    # Loopback test (connect MOSI to MISO)
+ *    /usr/bin/spidev_test -D /dev/spidev1.0 -v -s 1000000
+ *
+ * 4. Python example using spidev:
+ *    import spidev
+ *    spi = spidev.SpiDev()
+ *    spi.open(1, 0)  # bus 1, device 0
+ *    spi.max_speed_hz = 1000000
+ *    spi.mode = 0
+ *
+ *    # Send and receive data
+ *    data = [0x01, 0x02, 0x03]
+ *    response = spi.xfer2(data)
+ *    spi.close()
+ *
+ * 5. C example:
+ *    #include <linux/spi/spidev.h>
+ *    int fd = open("/dev/spidev1.0", O_RDWR);
+ *
+ *    uint8_t mode = SPI_MODE_0;
+ *    ioctl(fd, SPI_IOC_WR_MODE, &mode);
+ *
+ *    uint32_t speed = 1000000;
+ *    ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed);
+ *
+ *    uint8_t tx[] = {0x01, 0x02, 0x03};
+ *    uint8_t rx[sizeof(tx)] = {0};
+ *
+ *    struct spi_ioc_transfer tr = {
+ *        .tx_buf = (unsigned long)tx,
+ *        .rx_buf = (unsigned long)rx,
+ *        .len = sizeof(tx),
+ *        .speed_hz = speed,
+ *    };
+ *
+ *    ioctl(fd, SPI_IOC_MESSAGE(1), &tr);
+ *    close(fd);
+ *
+ * Common SPI Devices:
+ * ===================
+ *
+ * 1. SPI NOR Flash (W25Q128):
+ *    - Compatible: "winbond,w25q128", "jedec,spi-nor"
+ *    - Speed: up to 104 MHz
+ *    - Used for: Firmware storage, data logging
+ *
+ * 2. SPI LCD Display (ILI9341):
+ *    - Compatible: "ilitek,ili9341"
+ *    - Speed: up to 10 MHz
+ *    - Used for: User interface
+ *
+ * 3. ADC (MCP3008):
+ *    - Compatible: "microchip,mcp3008"
+ *    - Speed: up to 3.6 MHz
+ *    - Used for: Analog sensor reading
+ *
+ * 4. RFID Reader (RC522):
+ *    - Compatible: "nxp,mfrc522"
+ *    - Speed: up to 10 MHz
+ *    - Used for: Card/tag reading
+ *
+ * Troubleshooting:
+ * ===============
+ *
+ * 1. Devices not appearing:
+ *    dmesg | grep -i spi
+ *    dmesg | grep spi1
+ *
+ * 2. Check pinmux configuration:
+ *    cat /sys/kernel/debug/pinctrl/2430000.pinmux/pinmux-pins | grep spi1
+ *
+ * 3. Verify SPI is enabled:
+ *    cat /sys/firmware/devicetree/base/spi@3210000/status
+ *    # Should show "okay"
+ *
+ * 4. Check permissions:
+ *    sudo chmod 666 /dev/spidev1.*
+ *    # Or add user to spi group
+ *    sudo groupadd spi
+ *    sudo usermod -a -G spi $USER
+ *
+ * 5. Clock speed issues:
+ *    # If communication fails, try lower speeds
+ *    # Some devices don't work at high frequencies
+ *    # Start at 1 MHz and increase gradually
+ *
+ * 6. SPI mode mismatch:
+ *    # Verify device datasheet for correct mode
+ *    # Try different modes if data is corrupted
+ *
+ * 7. Loopback test:
+ *    # Connect MOSI (Pin 19) to MISO (Pin 21)
+ *    # Should receive what was transmitted
+ */

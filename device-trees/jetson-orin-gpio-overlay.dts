@@ -1,0 +1,268 @@
+/*
+ * jetson-orin-gpio-overlay.dts - GPIO device tree overlay for Jetson Orin AGX
+ *
+ * This overlay configures GPIO pins on the 40-pin expansion header for
+ * various use cases including button input, LED output, and interrupt handling.
+ *
+ * Compile with:
+ *   dtc -@ -I dts -O dtb -o jetson-orin-gpio-overlay.dtbo jetson-orin-gpio-overlay.dts
+ *
+ * Apply overlay:
+ *   sudo /opt/nvidia/jetson-io/jetson-io.py
+ *   or manually copy to /boot/dtb/ and update extlinux.conf
+ *
+ * Learning objectives:
+ * 1. Understand device tree overlay syntax
+ * 2. Learn GPIO pin configuration and muxing
+ * 3. Practice interrupt configuration
+ * 4. Handle pinctrl settings for Tegra
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    /* Overlay metadata */
+    compatible = "nvidia,p3737-0000+p3701-0000", "nvidia,tegra234";
+
+    /* Overlay fragment targeting GPIO controller */
+    fragment@0 {
+        target = <&tegra_main_gpio>;
+
+        __overlay__ {
+            /* GPIO pin configuration for custom application */
+
+            /* LED control GPIO - PQ.05 (GPIO448) - Pin 31 on 40-pin header */
+            gpio_led_pins: gpio-led-pins {
+                /* Configure as output, initially low */
+                gpio-hog;
+                gpios = <TEGRA234_MAIN_GPIO(Q, 5) GPIO_ACTIVE_HIGH>;
+                output-low;
+                label = "user-led";
+                status = "okay";
+            };
+
+            /* Button input GPIO - PQ.06 (GPIO449) - Pin 33 on 40-pin header */
+            gpio_button_pins: gpio-button-pins {
+                /* Configure as input with pull-up */
+                gpio-hog;
+                gpios = <TEGRA234_MAIN_GPIO(Q, 6) GPIO_ACTIVE_LOW>;
+                input;
+                label = "user-button";
+                status = "okay";
+            };
+
+            /* Interrupt-capable GPIO - PQ.07 (GPIO450) - Pin 35 on 40-pin header */
+            gpio_interrupt_pins: gpio-interrupt-pins {
+                /* Configure as input for interrupt handling */
+                gpio-hog;
+                gpios = <TEGRA234_MAIN_GPIO(Q, 7) GPIO_ACTIVE_HIGH>;
+                input;
+                label = "motion-sensor";
+                status = "okay";
+            };
+        };
+    };
+
+    /* Fragment for pinmux configuration */
+    fragment@1 {
+        target = <&pinmux>;
+
+        __overlay__ {
+            /* Pinmux settings to ensure pins are configured as GPIO */
+
+            gpio_custom_pins: gpio-custom-pins {
+                gpio-led {
+                    /* Pin PQ.05 - Configure as GPIO output */
+                    nvidia,pins = "pq.05";
+                    nvidia,function = "gpio";
+                    nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+                };
+
+                gpio-button {
+                    /* Pin PQ.06 - Configure as GPIO input with pull-up */
+                    nvidia,pins = "pq.06";
+                    nvidia,function = "gpio";
+                    nvidia,pull = <TEGRA_PIN_PULL_UP>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+                };
+
+                gpio-interrupt {
+                    /* Pin PQ.07 - Configure as GPIO input for interrupts */
+                    nvidia,pins = "pq.07";
+                    nvidia,function = "gpio";
+                    nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+                };
+            };
+        };
+    };
+
+    /* Fragment for custom GPIO device node */
+    fragment@2 {
+        target-path = "/";
+
+        __overlay__ {
+            /* GPIO-based LED device */
+            gpio_leds {
+                compatible = "gpio-leds";
+                status = "okay";
+
+                user-led-green {
+                    label = "user-led:green";
+                    gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(Q, 5) GPIO_ACTIVE_HIGH>;
+                    default-state = "off";
+                    linux,default-trigger = "none";
+                    retain-state-suspended;
+                };
+
+                user-led-red {
+                    label = "user-led:red";
+                    gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(Q, 4) GPIO_ACTIVE_HIGH>;
+                    default-state = "off";
+                    linux,default-trigger = "heartbeat";
+                };
+            };
+
+            /* GPIO-based button device */
+            gpio_keys {
+                compatible = "gpio-keys";
+                status = "okay";
+
+                user-button {
+                    label = "User Button";
+                    gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(Q, 6) GPIO_ACTIVE_LOW>;
+                    linux,code = <KEY_PROG1>;  /* Key code from linux/input-event-codes.h */
+                    debounce-interval = <50>;  /* 50ms debounce */
+                    gpio-key,wakeup;
+                };
+
+                power-button {
+                    label = "Power Button";
+                    gpios = <&tegra_aon_gpio TEGRA234_AON_GPIO(EE, 4) GPIO_ACTIVE_LOW>;
+                    linux,code = <KEY_POWER>;
+                    debounce-interval = <100>;
+                    gpio-key,wakeup;
+                };
+            };
+
+            /* Custom GPIO device for motion sensor */
+            motion_sensor {
+                compatible = "interview-study,gpio-motion-sensor";
+                gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(Q, 7) GPIO_ACTIVE_HIGH>;
+                interrupt-parent = <&tegra_main_gpio>;
+                interrupts = <TEGRA234_MAIN_GPIO(Q, 7) IRQ_TYPE_EDGE_RISING>;
+                interrupt-names = "motion-detected";
+                status = "okay";
+            };
+        };
+    };
+};
+
+/*
+ * GPIO Pin Mapping Reference for Jetson Orin AGX 40-pin Header:
+ *
+ * Pin  | Signal Name | GPIO Name | Linux GPIO | Function
+ * -----|-------------|-----------|------------|----------
+ *  3   | I2C2_SDA    | PZ.03     | 515        | I2C/GPIO
+ *  5   | I2C2_SCL    | PZ.02     | 514        | I2C/GPIO
+ *  7   | GPIO09      | PQ.06     | 449        | GPIO
+ *  11  | UART1_RTS   | PR.04     | 455        | UART/GPIO
+ *  12  | I2S0_SCLK   | PJ.00     | 388        | I2S/GPIO
+ *  13  | SPI1_SCK    | PZ.05     | 517        | SPI/GPIO
+ *  15  | GPIO12      | PH.00     | 372        | GPIO
+ *  16  | SPI1_CS1    | PZ.06     | 518        | SPI/GPIO
+ *  18  | SPI1_CS0    | PZ.07     | 519        | SPI/GPIO
+ *  19  | SPI0_MOSI   | PG.06     | 370        | SPI/GPIO
+ *  21  | SPI0_MISO   | PG.05     | 369        | SPI/GPIO
+ *  22  | GPIO27      | PN.01     | 421        | GPIO
+ *  23  | SPI0_SCK    | PG.04     | 368        | SPI/GPIO
+ *  24  | SPI0_CS0    | PG.07     | 371        | SPI/GPIO
+ *  26  | SPI0_CS1    | PZ.04     | 516        | SPI/GPIO
+ *  29  | GPIO05      | PAC.06    | 545        | GPIO
+ *  31  | GPIO06      | PQ.05     | 448        | GPIO
+ *  32  | GPIO07      | PN.00     | 420        | GPIO
+ *  33  | GPIO13      | PQ.06     | 449        | GPIO
+ *  35  | I2S0_FS     | PJ.02     | 390        | I2S/GPIO
+ *  36  | UART1_CTS   | PR.05     | 456        | UART/GPIO
+ *  37  | GPIO26      | PN.02     | 422        | GPIO
+ *  38  | I2S0_DIN    | PJ.03     | 391        | I2S/GPIO
+ *  40  | I2S0_DOUT   | PJ.01     | 389        | I2S/GPIO
+ */
+
+/*
+ * Tegra234 GPIO Banks and Base Addresses:
+ *
+ * Main GPIO Controller (tegra_main_gpio):
+ * - Port A-AG: GPIOs 316-579
+ * - Base address: 0x2200000
+ *
+ * AON GPIO Controller (tegra_aon_gpio):
+ * - Port AA-EE: GPIOs 0-41
+ * - Base address: 0xc2f0000
+ */
+
+/*
+ * Common GPIO flags (from include/dt-bindings/gpio/gpio.h):
+ * - GPIO_ACTIVE_HIGH: Pin is active when high (1)
+ * - GPIO_ACTIVE_LOW: Pin is active when low (0)
+ * - GPIO_OPEN_DRAIN: Pin is open-drain
+ * - GPIO_OPEN_SOURCE: Pin is open-source
+ * - GPIO_PULL_UP: Enable internal pull-up
+ * - GPIO_PULL_DOWN: Enable internal pull-down
+ */
+
+/*
+ * Interrupt types (from include/dt-bindings/interrupt-controller/irq.h):
+ * - IRQ_TYPE_EDGE_RISING: Trigger on rising edge
+ * - IRQ_TYPE_EDGE_FALLING: Trigger on falling edge
+ * - IRQ_TYPE_EDGE_BOTH: Trigger on both edges
+ * - IRQ_TYPE_LEVEL_HIGH: Trigger when level is high
+ * - IRQ_TYPE_LEVEL_LOW: Trigger when level is low
+ */
+
+/*
+ * Usage in kernel driver:
+ *
+ * #include <linux/gpio/consumer.h>
+ *
+ * struct gpio_desc *led_gpio;
+ * led_gpio = gpiod_get(&pdev->dev, "user-led", GPIOD_OUT_LOW);
+ * if (IS_ERR(led_gpio)) {
+ *     dev_err(&pdev->dev, "Failed to get LED GPIO\n");
+ *     return PTR_ERR(led_gpio);
+ * }
+ *
+ * gpiod_set_value(led_gpio, 1);  // Turn on
+ * gpiod_set_value(led_gpio, 0);  // Turn off
+ * gpiod_put(led_gpio);            // Release
+ */
+
+/*
+ * Testing the overlay:
+ *
+ * 1. Compile the overlay:
+ *    dtc -@ -I dts -O dtb -o jetson-orin-gpio-overlay.dtbo jetson-orin-gpio-overlay.dts
+ *
+ * 2. Install to boot partition:
+ *    sudo cp jetson-orin-gpio-overlay.dtbo /boot/dtb/
+ *
+ * 3. Add to extlinux.conf:
+ *    FDTOVERLAYS /boot/dtb/jetson-orin-gpio-overlay.dtbo
+ *
+ * 4. Reboot and verify:
+ *    ls /sys/class/leds/          # Check LED devices
+ *    ls /sys/class/gpio/          # Check GPIO exports
+ *    cat /proc/device-tree/gpio_leds/user-led-green/label
+ *
+ * 5. Control LED:
+ *    echo 1 > /sys/class/leds/user-led:green/brightness
+ *    echo 0 > /sys/class/leds/user-led:green/brightness
+ *
+ * 6. Monitor button:
+ *    evtest /dev/input/eventX     # Press button to see events
+ */

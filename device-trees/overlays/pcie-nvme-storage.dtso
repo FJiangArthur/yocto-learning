@@ -1,0 +1,293 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Device Tree Overlay: PCIe NVMe Storage Configuration
+ *
+ * Description: Enable PCIe controller for NVMe SSD storage
+ *              Configures power sequencing and link parameters
+ * Target: NVIDIA Jetson Orin (tegra234)
+ *
+ * Usage:
+ *   1. Compile: dtc -@ -I dts -O dtb -o pcie-nvme-storage.dtbo pcie-nvme-storage.dtso
+ *   2. Apply: Add to /boot/extlinux/extlinux.conf
+ *
+ * Hardware Requirements:
+ *   - M.2 NVMe SSD (PCIe Gen3/Gen4)
+ *   - M.2 M-key slot connected to PCIe controller
+ *   - Proper power supply for SSD
+ *
+ * PCIe Configuration:
+ *   - Controller: PCIe5 (C5)
+ *   - Lanes: x4
+ *   - Speed: Gen3 (8GT/s) or Gen4 (16GT/s)
+ *   - Form factor: M.2 2280/2242
+ *
+ * After loading:
+ *   - NVMe device appears as /dev/nvme0n1
+ *   - Partitions as /dev/nvme0n1p1, etc.
+ *   - Full PCIe bandwidth available
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "nvidia,p3768-0000+p3767-0000", "nvidia,tegra234";
+
+    /* Fragment 0: Enable PCIe controller C5 */
+    fragment@0 {
+        target = <&pcie_c5>;
+        __overlay__ {
+            status = "okay";
+
+            /*
+             * PCIe configuration
+             */
+            num-lanes = <4>;  /* x4 lanes */
+            max-link-speed = <4>;  /* Gen4 (1=Gen1, 2=Gen2, 3=Gen3, 4=Gen4) */
+
+            /*
+             * PHY mode: Root Complex (RC) mode
+             * Alternative: Endpoint (EP) mode for device mode
+             */
+            nvidia,pcie-mode = "rootport";
+
+            /*
+             * ASPM (Active State Power Management)
+             * L0s: Fast exit latency (<7us)
+             * L1: Slower exit latency but more power savings
+             */
+            nvidia,aspm-l0s-disable;  /* Disable L0s for stability */
+            /* nvidia,aspm-l1-disable; */  /* Uncomment to disable L1 */
+
+            /*
+             * Link configuration
+             */
+            nvidia,update-fc-fixup;  /* Flow control update fix */
+            nvidia,disable-clock-request;  /* Disable CLKREQ# */
+
+            /*
+             * Slot configuration
+             */
+            nvidia,slot-power-limit-mw = <25000>;  /* 25W slot power limit */
+        };
+    };
+
+    /* Fragment 1: PCIe PHY configuration */
+    fragment@1 {
+        target = <&p2u_pcie_c5>;
+        __overlay__ {
+            status = "okay";
+        };
+    };
+
+    /* Fragment 2: Configure PCIe clocks */
+    fragment@2 {
+        target = <&pcie_c5>;
+        __overlay__ {
+            clocks = <&bpmp_clks TEGRA234_CLK_PEX0_C5_CORE>;
+            clock-names = "core";
+
+            resets = <&bpmp_resets TEGRA234_RESET_PEX0_CORE_5_APB>,
+                     <&bpmp_resets TEGRA234_RESET_PEX0_CORE_5>;
+            reset-names = "apb", "core";
+        };
+    };
+
+    /* Fragment 3: PCIe power domain */
+    fragment@3 {
+        target = <&pcie_c5>;
+        __overlay__ {
+            power-domains = <&bpmp TEGRA234_POWER_DOMAIN_PCIEX4A>;
+
+            /*
+             * Power sequencing timings (in microseconds)
+             */
+            nvidia,pex-rst-gpio-delay-us = <1000>;  /* 1ms reset delay */
+            nvidia,refclk-select-gpio-delay-us = <100>;  /* 100us refclk delay */
+        };
+    };
+
+    /* Fragment 4: PCIe endpoint configuration (NVMe SSD) */
+    fragment@4 {
+        target = <&pcie_c5>;
+        __overlay__ {
+            #address-cells = <3>;
+            #size-cells = <2>;
+
+            /*
+             * PCIe endpoint device (auto-detected)
+             * NVMe SSDs are automatically probed by nvme driver
+             * No explicit device node needed for standard NVMe
+             */
+        };
+    };
+};
+
+/*
+ * Using NVMe Storage:
+ * ===================
+ *
+ * 1. Check NVMe device:
+ *    lspci | grep -i nvme
+ *    # Should show NVMe controller
+ *
+ *    ls /dev/nvme*
+ *    # Shows /dev/nvme0, /dev/nvme0n1
+ *
+ * 2. Get NVMe information:
+ *    sudo nvme list
+ *    # Shows all NVMe devices
+ *
+ *    sudo nvme id-ctrl /dev/nvme0
+ *    # Controller identification
+ *
+ *    sudo nvme id-ns /dev/nvme0n1
+ *    # Namespace identification
+ *
+ * 3. Check PCIe link status:
+ *    sudo lspci -vv -s $(lspci | grep NVMe | cut -d' ' -f1) | grep -i "lnk"
+ *    # Shows link speed and width (e.g., "Speed 8GT/s, Width x4")
+ *
+ * 4. Partition and format:
+ *    # Create partition table
+ *    sudo fdisk /dev/nvme0n1
+ *
+ *    # Or use parted for GPT
+ *    sudo parted /dev/nvme0n1 mklabel gpt
+ *    sudo parted /dev/nvme0n1 mkpart primary ext4 0% 100%
+ *
+ *    # Format partition
+ *    sudo mkfs.ext4 /dev/nvme0n1p1
+ *
+ * 5. Mount NVMe:
+ *    sudo mkdir -p /mnt/nvme
+ *    sudo mount /dev/nvme0n1p1 /mnt/nvme
+ *
+ * 6. Auto-mount on boot (/etc/fstab):
+ *    /dev/nvme0n1p1  /mnt/nvme  ext4  defaults,noatime  0  2
+ *
+ * 7. Performance testing:
+ *    # Sequential read
+ *    sudo hdparm -t /dev/nvme0n1
+ *
+ *    # Using dd
+ *    sudo dd if=/dev/nvme0n1 of=/dev/null bs=1M count=1000 iflag=direct
+ *
+ *    # Using fio
+ *    sudo fio --name=seqread --rw=read --direct=1 --ioengine=libaio \
+ *             --bs=1M --numjobs=1 --size=1G --runtime=60 \
+ *             --filename=/dev/nvme0n1
+ *
+ * NVMe Management:
+ * ================
+ *
+ * 1. Check SMART status:
+ *    sudo nvme smart-log /dev/nvme0
+ *    # Shows temperature, wear level, errors
+ *
+ * 2. Firmware update:
+ *    sudo nvme fw-download /dev/nvme0 --fw=firmware.bin
+ *    sudo nvme fw-activate /dev/nvme0 --slot=1 --action=1
+ *
+ * 3. Secure erase:
+ *    sudo nvme format /dev/nvme0n1 --ses=1
+ *    # WARNING: Erases all data!
+ *
+ * 4. Set features:
+ *    # Enable write cache
+ *    sudo nvme set-feature /dev/nvme0 --feature-id=0x06 --value=1
+ *
+ *    # Set power state
+ *    sudo nvme set-feature /dev/nvme0 --feature-id=0x02 --value=0
+ *
+ * Python Example:
+ * ===============
+ *
+ * import subprocess
+ * import json
+ *
+ * def get_nvme_info(device="/dev/nvme0"):
+ *     # Get NVMe controller info
+ *     result = subprocess.run(
+ *         ["nvme", "list", "-o", "json"],
+ *         capture_output=True, text=True
+ *     )
+ *     info = json.loads(result.stdout)
+ *
+ *     for dev in info["Devices"]:
+ *         if dev["DevicePath"] == device:
+ *             print(f"Model: {dev['ModelNumber']}")
+ *             print(f"Firmware: {dev['Firmware']}")
+ *             print(f"Size: {dev['UsedBytes'] / (1024**3):.2f} GB")
+ *             print(f"Serial: {dev['SerialNumber']}")
+ *
+ * def check_nvme_health(device="/dev/nvme0"):
+ *     # Get SMART log
+ *     result = subprocess.run(
+ *         ["nvme", "smart-log", device, "-o", "json"],
+ *         capture_output=True, text=True
+ *     )
+ *     smart = json.loads(result.stdout)
+ *
+ *     temp = smart["temperature"]
+ *     wear = smart.get("percentage_used", 0)
+ *     errors = smart.get("media_errors", 0)
+ *
+ *     print(f"Temperature: {temp}°C")
+ *     print(f"Wear level: {wear}%")
+ *     print(f"Media errors: {errors}")
+ *
+ *     return temp < 70 and wear < 80 and errors == 0
+ *
+ * get_nvme_info()
+ * if check_nvme_health():
+ *     print("NVMe health: OK")
+ * else:
+ *     print("NVMe health: WARNING")
+ *
+ * Troubleshooting:
+ * ================
+ *
+ * 1. NVMe not detected:
+ *    dmesg | grep -i pcie
+ *    dmesg | grep -i nvme
+ *
+ *    # Check PCIe enumeration
+ *    lspci -t
+ *
+ * 2. Link training failures:
+ *    # Check PCIe errors
+ *    dmesg | grep -i "link training"
+ *
+ *    # Try lower link speed
+ *    # Edit overlay: max-link-speed = <3>;  (Gen3)
+ *
+ * 3. Performance issues:
+ *    # Verify link speed
+ *    sudo lspci -vv | grep -i "lnkcap\|lnksta"
+ *
+ *    # Check for ASPM issues
+ *    # Try disabling ASPM in overlay
+ *
+ *    # Verify 4 lanes active
+ *    # Should show "Width x4"
+ *
+ * 4. Power issues:
+ *    # Check power domain
+ *    cat /sys/kernel/debug/bpmp/debug/power/domain_info
+ *
+ *    # Verify SSD power consumption
+ *    # Some SSDs exceed 5W and need external power
+ *
+ * 5. Thermal throttling:
+ *    # Monitor NVMe temperature
+ *    watch -n 1 'sudo nvme smart-log /dev/nvme0 | grep temperature'
+ *
+ *    # Add heatsink if temperature >70°C
+ *
+ * 6. Boot from NVMe:
+ *    # Update boot configuration
+ *    # Copy rootfs to NVMe
+ *    # Modify extlinux.conf:
+ *    # APPEND root=/dev/nvme0n1p1
+ */

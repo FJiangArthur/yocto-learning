@@ -1,0 +1,350 @@
+/*
+ * jetson-orin-i2c-sensor.dts - I2C device tree overlay for Jetson Orin AGX
+ *
+ * This overlay configures I2C devices on the Jetson Orin 40-pin header,
+ * including temperature sensors, accelerometers, and custom I2C peripherals.
+ *
+ * Compile with:
+ *   dtc -@ -I dts -O dtb -o jetson-orin-i2c-sensor.dtbo jetson-orin-i2c-sensor.dts
+ *
+ * Learning objectives:
+ * 1. Understand I2C device configuration in device tree
+ * 2. Learn I2C addressing and bus configuration
+ * 3. Practice interrupt integration for I2C devices
+ * 4. Handle pinmux for I2C functionality
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/tegra234-gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+    compatible = "nvidia,p3737-0000+p3701-0000", "nvidia,tegra234";
+
+    /* Fragment targeting I2C bus 2 (40-pin header pins 3/5) */
+    fragment@0 {
+        target = <&gen2_i2c>;  /* I2C bus 2 - GP I2C */
+
+        __overlay__ {
+            status = "okay";
+
+            /* Configure I2C bus parameters */
+            clock-frequency = <400000>;  /* 400 kHz fast mode */
+
+            /* BME280 Environmental Sensor - Temperature/Humidity/Pressure */
+            bme280@76 {
+                compatible = "bosch,bme280";
+                reg = <0x76>;  /* I2C address 0x76 (or 0x77 depending on SDO pin) */
+                status = "okay";
+            };
+
+            /* MPU6050 6-axis IMU - Accelerometer + Gyroscope */
+            mpu6050@68 {
+                compatible = "invensense,mpu6050";
+                reg = <0x68>;  /* I2C address 0x68 */
+                interrupt-parent = <&tegra_main_gpio>;
+                interrupts = <TEGRA234_MAIN_GPIO(Q, 7) IRQ_TYPE_EDGE_RISING>;
+                vdd-supply = <&vdd_3v3_sys>;
+                vddio-supply = <&vdd_1v8_sys>;
+                status = "okay";
+
+                mount-matrix = "0", "-1", "0",
+                               "-1", "0", "0",
+                               "0", "0", "1";
+            };
+
+            /* INA219 Current/Power Monitor */
+            ina219@40 {
+                compatible = "ti,ina219";
+                reg = <0x40>;  /* I2C address 0x40-0x4F configurable */
+                shunt-resistor = <100000>;  /* 0.1 ohm in micro-ohms */
+                status = "okay";
+            };
+
+            /* EEPROM 24C256 - 256 Kbit I2C EEPROM */
+            eeprom@50 {
+                compatible = "atmel,24c256";
+                reg = <0x50>;  /* I2C address 0x50-0x57 */
+                pagesize = <64>;
+                size = <32768>;  /* 32KB */
+                status = "okay";
+            };
+
+            /* PCA9685 16-channel PWM controller */
+            pca9685@40 {
+                compatible = "nxp,pca9685-pwm";
+                reg = <0x40>;
+                #pwm-cells = <2>;
+                status = "okay";
+
+                /* Example PWM output configuration */
+                pwm@0 {
+                    reg = <0>;
+                    /* Can be used for servo control, LED dimming, etc. */
+                };
+            };
+        };
+    };
+
+    /* Fragment for I2C bus 8 (40-pin header alternate) */
+    fragment@1 {
+        target = <&gen8_i2c>;  /* I2C bus 8 */
+
+        __overlay__ {
+            status = "okay";
+            clock-frequency = <100000>;  /* 100 kHz standard mode */
+
+            /* TMP102 Temperature Sensor */
+            tmp102@48 {
+                compatible = "ti,tmp102";
+                reg = <0x48>;
+                status = "okay";
+            };
+
+            /* VL53L0X Time-of-Flight Distance Sensor */
+            vl53l0x@29 {
+                compatible = "st,vl53l0x";
+                reg = <0x29>;
+                interrupt-parent = <&tegra_main_gpio>;
+                interrupts = <TEGRA234_MAIN_GPIO(N, 2) IRQ_TYPE_EDGE_FALLING>;
+                status = "okay";
+            };
+        };
+    };
+
+    /* Fragment for pinmux - ensure I2C pins are configured correctly */
+    fragment@2 {
+        target = <&pinmux>;
+
+        __overlay__ {
+            i2c2_pins: i2c2-pins {
+                i2c2-scl {
+                    nvidia,pins = "gen2_i2c_scl_pcc7";
+                    nvidia,function = "i2c2";
+                    nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+                    nvidia,io-high-voltage = <TEGRA_PIN_DISABLE>;
+                    nvidia,lpdr = <TEGRA_PIN_DISABLE>;
+                };
+
+                i2c2-sda {
+                    nvidia,pins = "gen2_i2c_sda_pcc6";
+                    nvidia,function = "i2c2";
+                    nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+                    nvidia,io-high-voltage = <TEGRA_PIN_DISABLE>;
+                    nvidia,lpdr = <TEGRA_PIN_DISABLE>;
+                };
+            };
+
+            i2c8_pins: i2c8-pins {
+                i2c8-scl {
+                    nvidia,pins = "gen8_i2c_scl_pdd2";
+                    nvidia,function = "i2c8";
+                    nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+                };
+
+                i2c8-sda {
+                    nvidia,pins = "gen8_i2c_sda_pdd1";
+                    nvidia,function = "i2c8";
+                    nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+                };
+            };
+        };
+    };
+
+    /* Fragment for custom I2C device node */
+    fragment@3 {
+        target-path = "/";
+
+        __overlay__ {
+            /* Custom I2C sensor array */
+            sensor-array {
+                compatible = "interview-study,sensor-array";
+                i2c-bus = <&gen2_i2c>;
+                status = "okay";
+
+                sensor@0 {
+                    label = "temp-sensor-1";
+                    i2c-address = <0x48>;
+                };
+
+                sensor@1 {
+                    label = "temp-sensor-2";
+                    i2c-address = <0x49>;
+                };
+            };
+        };
+    };
+};
+
+/*
+ * I2C Bus Mapping on Jetson Orin AGX:
+ *
+ * Bus | Device Path        | 40-Pin Header | Speed
+ * ----|-------------------|---------------|-------
+ * 2   | /dev/i2c-2        | Pins 3,5      | 400kHz
+ * 8   | /dev/i2c-8        | -             | 100kHz
+ * 1   | /dev/i2c-1        | -             | 400kHz
+ *
+ * Pin Mapping:
+ * Pin 3: I2C2_SDA (PCC6)
+ * Pin 5: I2C2_SCL (PCC7)
+ */
+
+/*
+ * Common I2C Sensor Addresses:
+ *
+ * Device              | Address Range | Protocol
+ * --------------------|---------------|----------
+ * BME280/BMP280       | 0x76, 0x77    | I2C
+ * MPU6050/9250        | 0x68, 0x69    | I2C
+ * INA219              | 0x40-0x4F     | I2C
+ * EEPROM 24Cxx        | 0x50-0x57     | I2C
+ * TMP102/TMP75        | 0x48-0x4B     | I2C
+ * PCA9685 (PWM)       | 0x40-0x7F     | I2C
+ * VL53L0X (ToF)       | 0x29          | I2C
+ * TSL2561 (Light)     | 0x29, 0x39,0x49| I2C
+ * SI1145 (UV)         | 0x60          | I2C
+ * ADS1115 (ADC)       | 0x48-0x4B     | I2C
+ */
+
+/*
+ * I2C Device Properties Reference:
+ *
+ * - compatible: String matching driver in kernel
+ * - reg: I2C slave address (7-bit, not including R/W bit)
+ * - clock-frequency: Bus speed in Hz (100000, 400000, 1000000)
+ * - interrupt-parent: GPIO controller for interrupt line
+ * - interrupts: GPIO pin and trigger type
+ * - vdd-supply: Main power supply regulator
+ * - vddio-supply: I/O voltage supply regulator
+ * - wakeup-source: Device can wake system from suspend
+ */
+
+/*
+ * Kernel driver binding:
+ *
+ * The compatible string must match a driver's of_match_table:
+ *
+ * static const struct of_device_id bme280_of_match[] = {
+ *     { .compatible = "bosch,bme280" },
+ *     { }
+ * };
+ * MODULE_DEVICE_TABLE(of, bme280_of_match);
+ */
+
+/*
+ * Testing I2C devices:
+ *
+ * 1. Scan for devices on bus:
+ *    i2cdetect -y -r 2
+ *
+ * 2. Read from device register:
+ *    i2cget -y 2 0x76 0xD0  # Read BME280 chip ID (should return 0x60)
+ *
+ * 3. Write to device register:
+ *    i2cset -y 2 0x76 0xF4 0x27  # Set BME280 ctrl_meas register
+ *
+ * 4. Dump all registers:
+ *    i2cdump -y 2 0x76
+ *
+ * 5. Check kernel driver binding:
+ *    ls -l /sys/bus/i2c/devices/2-0076/driver
+ *    cat /sys/bus/i2c/devices/2-0076/name
+ *
+ * 6. Read sensor data (if driver loaded):
+ *    cat /sys/bus/iio/devices/iio:device0/in_temp_input
+ *    cat /sys/bus/iio/devices/iio:device0/in_pressure_input
+ *    cat /sys/bus/iio/devices/iio:device0/in_humidityrelative_input
+ */
+
+/*
+ * Example kernel driver usage:
+ *
+ * #include <linux/i2c.h>
+ * #include <linux/of_device.h>
+ *
+ * static int sensor_probe(struct i2c_client *client,
+ *                         const struct i2c_device_id *id) {
+ *     struct device *dev = &client->dev;
+ *     u8 chip_id;
+ *     int ret;
+ *
+ *     // Read chip ID register
+ *     ret = i2c_smbus_read_byte_data(client, CHIP_ID_REG);
+ *     if (ret < 0) {
+ *         dev_err(dev, "Failed to read chip ID\n");
+ *         return ret;
+ *     }
+ *
+ *     chip_id = (u8)ret;
+ *     dev_info(dev, "Found sensor with chip ID: 0x%02x\n", chip_id);
+ *
+ *     return 0;
+ * }
+ *
+ * static const struct of_device_id sensor_of_match[] = {
+ *     { .compatible = "bosch,bme280" },
+ *     { }
+ * };
+ * MODULE_DEVICE_TABLE(of, sensor_of_match);
+ *
+ * static struct i2c_driver sensor_driver = {
+ *     .driver = {
+ *         .name = "bme280",
+ *         .of_match_table = sensor_of_match,
+ *     },
+ *     .probe = sensor_probe,
+ * };
+ * module_i2c_driver(sensor_driver);
+ */
+
+/*
+ * I2C Bus Speed Considerations:
+ *
+ * - Standard Mode: 100 kHz (most compatible)
+ * - Fast Mode: 400 kHz (common for sensors)
+ * - Fast Mode Plus: 1 MHz (high-speed devices)
+ * - High Speed Mode: 3.4 MHz (rare, special hardware)
+ *
+ * Orin supports up to 1 MHz on most buses
+ */
+
+/*
+ * Pull-up Resistors:
+ *
+ * I2C requires external pull-up resistors on SDA and SCL lines.
+ * Typical values: 2.2kΩ to 10kΩ depending on bus capacitance.
+ *
+ * For 40-pin header: usually 2.2kΩ to 3.3V (provided on carrier board)
+ */
+
+/*
+ * Troubleshooting:
+ *
+ * 1. No devices detected:
+ *    - Check power supply to sensor
+ *    - Verify pull-up resistors present
+ *    - Confirm correct bus number
+ *    - Check pinmux configuration
+ *
+ * 2. Device detected but no driver:
+ *    - Verify compatible string matches kernel driver
+ *    - Check if driver is compiled (CONFIG_SENSORS_BME280)
+ *    - Load driver manually: modprobe bme280-i2c
+ *
+ * 3. Communication errors:
+ *    - Reduce bus speed (try 100kHz)
+ *    - Check for bus contention
+ *    - Verify voltage levels (3.3V vs 5V)
+ *    - Check cable length (keep short for high speed)
+ */

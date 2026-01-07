@@ -1,0 +1,420 @@
+/*
+ * jetson-orin-spi-display.dts - SPI device tree overlay for Jetson Orin AGX
+ *
+ * This overlay configures SPI devices on the Jetson Orin 40-pin header,
+ * including SPI displays (ST7789, ILI9341), SPI flash, and custom peripherals.
+ *
+ * Compile with:
+ *   dtc -@ -I dts -O dtb -o jetson-orin-spi-display.dtbo jetson-orin-spi-display.dts
+ *
+ * Learning objectives:
+ * 1. Understand SPI device configuration in device tree
+ * 2. Learn SPI timing parameters and chip select configuration
+ * 3. Practice DMA and interrupt configuration for SPI
+ * 4. Handle framebuffer device setup for SPI displays
+ */
+
+/dts-v1/;
+/plugin/;
+
+#include <dt-bindings/gpio/tegra234-gpio.h>
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+    compatible = "nvidia,p3737-0000+p3701-0000", "nvidia,tegra234";
+
+    /* Fragment targeting SPI1 controller (40-pin header) */
+    fragment@0 {
+        target = <&spi1>;  /* SPI1 - pins 19,21,23,24,26 */
+
+        __overlay__ {
+            status = "okay";
+
+            /* SPI bus configuration */
+            spi-max-frequency = <50000000>;  /* 50 MHz max */
+            num-cs = <2>;  /* Number of chip select lines */
+
+            /* ST7789V 240x320 SPI LCD Display */
+            st7789v@0 {
+                compatible = "sitronix,st7789v";
+                reg = <0>;  /* Chip select 0 */
+                spi-max-frequency = <40000000>;  /* 40 MHz */
+                spi-cpol;  /* Clock polarity: idle high */
+                spi-cpha;  /* Clock phase: sample on second edge */
+
+                /* Display control GPIOs */
+                reset-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(H, 0) GPIO_ACTIVE_LOW>;
+                dc-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(N, 1) GPIO_ACTIVE_HIGH>;
+                led-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(N, 2) GPIO_ACTIVE_HIGH>;
+
+                /* Display dimensions */
+                width-mm = <36>;
+                height-mm = <48>;
+
+                /* Rotation: 0, 90, 180, 270 degrees */
+                rotation = <0>;
+
+                /* Framebuffer configuration */
+                buswidth = <8>;  /* 8-bit parallel interface */
+                fps = <60>;      /* Target 60 fps */
+                bgr;             /* BGR pixel order (not RGB) */
+
+                /* Display init sequence (gamma, power, etc.) */
+                init = <
+                    0x01000011  /* Sleep out */
+                    0x02000078  /* 120ms delay */
+                    0x01000036  /* Memory access control */
+                    0x02000000  /* Row/column order */
+                    0x0100003A  /* Pixel format */
+                    0x02000055  /* 16-bit color */
+                    0x01000029  /* Display on */
+                >;
+
+                status = "okay";
+            };
+
+            /* ILI9341 320x240 SPI LCD Display (alternative) */
+            ili9341@0 {
+                compatible = "ilitek,ili9341";
+                reg = <0>;
+                spi-max-frequency = <32000000>;  /* 32 MHz */
+                spi-cpol;
+                spi-cpha;
+
+                reset-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(H, 0) GPIO_ACTIVE_LOW>;
+                dc-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(N, 1) GPIO_ACTIVE_HIGH>;
+
+                rotation = <90>;
+                bgr;
+                fps = <30>;
+
+                status = "disabled";  /* Only one display active at a time */
+            };
+
+            /* W25Q128 SPI NOR Flash - 16MB */
+            flash@1 {
+                compatible = "winbond,w25q128", "jedec,spi-nor";
+                reg = <1>;  /* Chip select 1 */
+                spi-max-frequency = <104000000>;  /* 104 MHz max */
+
+                /* Partition table */
+                partitions {
+                    compatible = "fixed-partitions";
+                    #address-cells = <1>;
+                    #size-cells = <1>;
+
+                    partition@0 {
+                        label = "bootloader";
+                        reg = <0x000000 0x100000>;  /* 1MB */
+                        read-only;
+                    };
+
+                    partition@100000 {
+                        label = "config";
+                        reg = <0x100000 0x100000>;  /* 1MB */
+                    };
+
+                    partition@200000 {
+                        label = "data";
+                        reg = <0x200000 0xE00000>;  /* 14MB */
+                    };
+                };
+
+                status = "okay";
+            };
+
+            /* MCP3008 8-channel 10-bit ADC */
+            mcp3008@1 {
+                compatible = "microchip,mcp3008";
+                reg = <1>;
+                spi-max-frequency = <1000000>;  /* 1 MHz */
+                vref-supply = <&vdd_3v3_sys>;
+                status = "disabled";
+            };
+        };
+    };
+
+    /* Fragment for SPI0 controller (alternative SPI bus) */
+    fragment@1 {
+        target = <&spi0>;  /* SPI0 - pins 19,21,23,24,26 (alternate function) */
+
+        __overlay__ {
+            status = "okay";
+            spi-max-frequency = <25000000>;
+
+            /* MFRC522 RFID Reader */
+            mfrc522@0 {
+                compatible = "nxp,mfrc522";
+                reg = <0>;
+                spi-max-frequency = <10000000>;  /* 10 MHz max */
+
+                interrupt-parent = <&tegra_main_gpio>;
+                interrupts = <TEGRA234_MAIN_GPIO(Q, 7) IRQ_TYPE_EDGE_FALLING>;
+                reset-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(H, 0) GPIO_ACTIVE_LOW>;
+
+                status = "disabled";
+            };
+
+            /* BME680 Environmental Sensor (SPI mode) */
+            bme680@0 {
+                compatible = "bosch,bme680";
+                reg = <0>;
+                spi-max-frequency = <10000000>;
+                status = "disabled";
+            };
+        };
+    };
+
+    /* Fragment for pinmux - configure SPI pins */
+    fragment@2 {
+        target = <&pinmux>;
+
+        __overlay__ {
+            spi1_pins: spi1-pins {
+                spi1-mosi {
+                    nvidia,pins = "spi1_mosi_pz5";
+                    nvidia,function = "spi1";
+                    nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+                };
+
+                spi1-miso {
+                    nvidia,pins = "spi1_miso_pz4";
+                    nvidia,function = "spi1";
+                    nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_ENABLE>;
+                };
+
+                spi1-sck {
+                    nvidia,pins = "spi1_sck_pz3";
+                    nvidia,function = "spi1";
+                    nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+                };
+
+                spi1-cs0 {
+                    nvidia,pins = "spi1_cs0_pz6";
+                    nvidia,function = "spi1";
+                    nvidia,pull = <TEGRA_PIN_PULL_UP>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+                };
+
+                spi1-cs1 {
+                    nvidia,pins = "spi1_cs1_pz7";
+                    nvidia,function = "spi1";
+                    nvidia,pull = <TEGRA_PIN_PULL_UP>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+                };
+            };
+
+            /* GPIO pins for display control */
+            display_control_pins: display-control-pins {
+                display-reset {
+                    nvidia,pins = "ph.00";
+                    nvidia,function = "gpio";
+                    nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+                };
+
+                display-dc {
+                    nvidia,pins = "pn.01";
+                    nvidia,function = "gpio";
+                    nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+                };
+
+                display-backlight {
+                    nvidia,pins = "pn.02";
+                    nvidia,function = "gpio";
+                    nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+                    nvidia,tristate = <TEGRA_PIN_DISABLE>;
+                    nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+                };
+            };
+        };
+    };
+
+    /* Fragment for framebuffer device */
+    fragment@3 {
+        target-path = "/";
+
+        __overlay__ {
+            /* Framebuffer device for SPI display */
+            spi_display_fb: framebuffer@0 {
+                compatible = "simple-framebuffer";
+                status = "okay";
+
+                width = <240>;
+                height = <320>;
+                stride = <480>;  /* width * 2 (16-bit color) */
+                format = "r5g6b5";  /* RGB565 pixel format */
+
+                display = <&st7789v>;
+            };
+
+            /* Backlight control via PWM */
+            backlight: backlight {
+                compatible = "pwm-backlight";
+                pwms = <&tegra_pwm0 0 1000000>;  /* 1kHz PWM */
+                brightness-levels = <0 4 8 16 32 64 128 255>;
+                default-brightness-level = <6>;
+                enable-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(N, 2) GPIO_ACTIVE_HIGH>;
+                status = "okay";
+            };
+        };
+    };
+};
+
+/*
+ * SPI Pin Mapping on Jetson Orin AGX 40-pin Header:
+ *
+ * Pin  | Signal    | Function | SPI Bus
+ * -----|-----------|----------|--------
+ *  19  | SPI0_MOSI | MOSI     | SPI0
+ *  21  | SPI0_MISO | MISO     | SPI0
+ *  23  | SPI0_SCK  | SCLK     | SPI0
+ *  24  | SPI0_CS0  | CS0      | SPI0
+ *  26  | SPI0_CS1  | CS1      | SPI0
+ *
+ * Alternate (SPI1):
+ *  13  | SPI1_SCK  | SCLK     | SPI1
+ *  16  | SPI1_CS1  | CS1      | SPI1
+ *  18  | SPI1_CS0  | CS0      | SPI1
+ *  19  | SPI1_MOSI | MOSI     | SPI1
+ *  21  | SPI1_MISO | MISO     | SPI1
+ */
+
+/*
+ * SPI Modes (CPOL/CPHA):
+ *
+ * Mode | CPOL | CPHA | Description
+ * -----|------|------|-------------
+ *  0   |  0   |  0   | Clock idle low, sample on rising edge
+ *  1   |  0   |  1   | Clock idle low, sample on falling edge
+ *  2   |  1   |  0   | Clock idle high, sample on falling edge
+ *  3   |  1   |  1   | Clock idle high, sample on rising edge
+ *
+ * Most displays use mode 0 or mode 3
+ */
+
+/*
+ * Testing SPI devices:
+ *
+ * 1. List SPI buses:
+ *    ls /dev/spidev*
+ *
+ * 2. Test SPI communication (spi-tools):
+ *    spi-config -d /dev/spidev0.0 -q
+ *    spi-pipe -d /dev/spidev0.0 -b 8 -s 1000000
+ *
+ * 3. Read SPI flash ID:
+ *    flashrom -p linux_spi:dev=/dev/spidev1.1
+ *    cat /sys/bus/spi/devices/spi1.1/modalias
+ *
+ * 4. Display framebuffer test:
+ *    cat /dev/urandom > /dev/fb0  # Fill with random pixels
+ *    fbset -i  # Show framebuffer info
+ *    dd if=/dev/zero of=/dev/fb0  # Clear screen
+ *
+ * 5. SPI performance test:
+ *    time dd if=/dev/zero of=/dev/spidev0.0 bs=4096 count=1000
+ */
+
+/*
+ * Kernel SPI driver example:
+ *
+ * #include <linux/spi/spi.h>
+ *
+ * static int display_spi_write_cmd(struct spi_device *spi, u8 cmd) {
+ *     struct spi_transfer t = {
+ *         .tx_buf = &cmd,
+ *         .len = 1,
+ *     };
+ *     struct spi_message m;
+ *
+ *     spi_message_init(&m);
+ *     spi_message_add_tail(&t, &m);
+ *
+ *     return spi_sync(spi, &m);
+ * }
+ *
+ * static int display_probe(struct spi_device *spi) {
+ *     // Configure SPI parameters
+ *     spi->mode = SPI_MODE_3;
+ *     spi->bits_per_word = 8;
+ *     spi->max_speed_hz = 40000000;
+ *
+ *     return spi_setup(spi);
+ * }
+ */
+
+/*
+ * Display Initialization Sequence (ST7789V):
+ *
+ * 1. Hardware reset (toggle RESET GPIO)
+ * 2. Sleep out (0x11)
+ * 3. Wait 120ms
+ * 4. Set pixel format (0x3A) - RGB565
+ * 5. Set memory access control (0x36) - rotation
+ * 6. Display on (0x29)
+ * 7. Start streaming pixel data (0x2C)
+ */
+
+/*
+ * Performance Optimization:
+ *
+ * - Use DMA for large transfers (automatically enabled)
+ * - Batch SPI transactions to reduce overhead
+ * - Use double buffering for framebuffer updates
+ * - Consider compressed pixel formats
+ * - Optimize SPI clock frequency for your display
+ */
+
+/*
+ * Troubleshooting:
+ *
+ * 1. Display shows garbage:
+ *    - Check CPOL/CPHA settings (try different SPI modes)
+ *    - Verify SPI clock frequency (try lower speed)
+ *    - Check DC (Data/Command) GPIO polarity
+ *
+ * 2. No display output:
+ *    - Verify reset sequence (check RESET GPIO)
+ *    - Confirm power supply voltage (3.3V vs 5V)
+ *    - Check SPI wiring (MOSI/MISO not swapped)
+ *    - Verify chip select is working
+ *
+ * 3. SPI communication fails:
+ *    - Check pinmux configuration
+ *    - Verify chip select polarity
+ *    - Try reducing clock frequency
+ *    - Check for bus contention (only one master)
+ */
+
+/*
+ * Framebuffer access from userspace:
+ *
+ * #include <linux/fb.h>
+ * #include <sys/mman.h>
+ *
+ * int fd = open("/dev/fb0", O_RDWR);
+ * struct fb_var_screeninfo vinfo;
+ * ioctl(fd, FBIOGET_VSCREENINFO, &vinfo);
+ *
+ * size_t screensize = vinfo.yres * vinfo.xres * vinfo.bits_per_pixel / 8;
+ * uint16_t *fbp = mmap(0, screensize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+ *
+ * // Draw red pixel at (100, 100)
+ * int location = 100 * vinfo.xres + 100;
+ * fbp[location] = 0xF800;  // RGB565 red
+ *
+ * munmap(fbp, screensize);
+ * close(fd);
+ */

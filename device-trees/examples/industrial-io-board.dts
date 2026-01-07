@@ -1,0 +1,520 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Industrial I/O Expansion Board for Jetson Orin
+ *
+ * This device tree describes an industrial automation carrier board
+ * with extensive I/O capabilities for factory automation, robotics,
+ * and process control applications.
+ *
+ * Features:
+ * - 8x isolated digital inputs (24V)
+ * - 8x relay outputs (250VAC/30VDC)
+ * - 4x analog inputs (0-10V, 4-20mA)
+ * - 2x analog outputs (0-10V)
+ * - 2x CAN bus (industrial protocols)
+ * - 4x RS-485 serial ports
+ * - Ethernet with TSN (Time-Sensitive Networking)
+ * - Isolated power supplies
+ * - Watchdog timer
+ * - Real-time clock with battery backup
+ *
+ * Target: Industrial automation, robotics, machine control
+ *
+ * Compilation:
+ *   dtc -I dts -O dtb -o industrial-io-board.dtb industrial-io-board.dts
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/clock/tegra234-clock.h>
+#include <dt-bindings/gpio/tegra234-gpio.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+
+/ {
+    model = "Industrial I/O Expansion Board - Jetson Orin";
+    compatible = "industrial,io-board", "nvidia,p3768-0000+p3767-0000", "nvidia,tegra234";
+
+    #address-cells = <2>;
+    #size-cells = <2>;
+
+    chosen {
+        bootargs = "console=ttyTCU0,115200 isolcpus=0-3";  /* CPU isolation for RT */
+        stdout-path = "serial0:115200n8";
+    };
+
+    /*
+     * Power Supplies
+     * ==============
+     */
+    regulators {
+        compatible = "simple-bus";
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        /* Main 24V input (from industrial power supply) */
+        vdd_24v_main: regulator@0 {
+            compatible = "regulator-fixed";
+            reg = <0>;
+            regulator-name = "VDD_24V_MAIN";
+            regulator-min-microvolt = <24000000>;
+            regulator-max-microvolt = <24000000>;
+            regulator-always-on;
+            regulator-boot-on;
+        };
+
+        /* Isolated 5V for I/O modules */
+        vdd_5v_io: regulator@1 {
+            compatible = "regulator-fixed";
+            reg = <1>;
+            regulator-name = "VDD_5V_IO";
+            regulator-min-microvolt = <5000000>;
+            regulator-max-microvolt = <5000000>;
+            regulator-always-on;
+            enable-active-high;
+            gpio = <&tegra_main_gpio TEGRA234_MAIN_GPIO(Q, 0) 0>;
+        };
+
+        /* Isolated 3.3V for CAN/RS485 transceivers */
+        vdd_3v3_iso: regulator@2 {
+            compatible = "regulator-fixed";
+            reg = <2>;
+            regulator-name = "VDD_3V3_ISO";
+            regulator-min-microvolt = <3300000>;
+            regulator-max-microvolt = <3300000>;
+            regulator-always-on;
+        };
+    };
+
+    /*
+     * Watchdog Timer
+     * ==============
+     */
+    watchdog {
+        compatible = "linux,wdt-gpio";
+        gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(R, 0) GPIO_ACTIVE_HIGH>;
+        hw_algo = "toggle";
+        hw_margin_ms = <1000>;
+        always-running;
+    };
+
+    /*
+     * Status LEDs
+     * ===========
+     */
+    gpio-leds {
+        compatible = "gpio-leds";
+
+        power-ok {
+            label = "power:green";
+            gpios = <&gpio_expander_1 0 0>;
+            default-state = "on";
+        };
+
+        system-run {
+            label = "run:green";
+            gpios = <&gpio_expander_1 1 0>;
+            linux,default-trigger = "heartbeat";
+        };
+
+        system-error {
+            label = "error:red";
+            gpios = <&gpio_expander_1 2 0>;
+            default-state = "off";
+        };
+
+        can0-active {
+            label = "can0:yellow";
+            gpios = <&gpio_expander_1 3 0>;
+            linux,default-trigger = "can0-activity";
+        };
+
+        can1-active {
+            label = "can1:yellow";
+            gpios = <&gpio_expander_1 4 0>;
+            linux,default-trigger = "can1-activity";
+        };
+
+        ethernet-link {
+            label = "eth:green";
+            gpios = <&gpio_expander_1 5 0>;
+            linux,default-trigger = "netdev";
+        };
+    };
+};
+
+/*
+ * I2C Configuration
+ * =================
+ */
+
+/* I2C1: System Management */
+&gen1_i2c {
+    status = "okay";
+    clock-frequency = <400000>;
+
+    /* GPIO Expander for I/O control */
+    gpio_expander_1: gpio@20 {
+        compatible = "nxp,pca9555";
+        reg = <0x20>;
+        gpio-controller;
+        #gpio-cells = <2>;
+        interrupt-parent = <&tegra_main_gpio>;
+        interrupts = <TEGRA234_MAIN_GPIO(H, 0) IRQ_TYPE_EDGE_FALLING>;
+    };
+
+    gpio_expander_2: gpio@21 {
+        compatible = "nxp,pca9555";
+        reg = <0x21>;
+        gpio-controller;
+        #gpio-cells = <2>;
+    };
+
+    /* Real-Time Clock with battery backup */
+    rtc@68 {
+        compatible = "dallas,ds1307";
+        reg = <0x68>;
+        trickle-resistor-ohms = <250>;
+        wakeup-source;
+    };
+
+    /* EEPROM for configuration storage */
+    eeprom@50 {
+        compatible = "atmel,24c256";
+        reg = <0x50>;
+        pagesize = <64>;
+    };
+
+    /* Temperature sensor for enclosure */
+    temp_sensor@48 {
+        compatible = "ti,tmp102";
+        reg = <0x48>;
+        interrupt-parent = <&tegra_main_gpio>;
+        interrupts = <TEGRA234_MAIN_GPIO(H, 1) IRQ_TYPE_EDGE_FALLING>;
+    };
+};
+
+/* I2C2: Analog I/O Modules */
+&gen2_i2c {
+    status = "okay";
+    clock-frequency = <100000>;
+
+    /* 4-channel 16-bit ADC for analog inputs */
+    adc@48 {
+        compatible = "ti,ads1115";
+        reg = <0x48>;
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        channel@0 {
+            reg = <0>;
+            ti,gain = <1>;          /* ±4.096V range */
+            ti,datarate = <4>;      /* 128 SPS */
+        };
+
+        channel@1 {
+            reg = <1>;
+            ti,gain = <1>;
+        };
+
+        channel@2 {
+            reg = <2>;
+            ti,gain = <1>;
+        };
+
+        channel@3 {
+            reg = <3>;
+            ti,gain = <1>;
+        };
+    };
+
+    /* 2-channel 12-bit DAC for analog outputs */
+    dac@60 {
+        compatible = "microchip,mcp4725";
+        reg = <0x60>;
+        vdd-supply = <&vdd_5v_io>;
+    };
+
+    dac@61 {
+        compatible = "microchip,mcp4725";
+        reg = <0x61>;
+        vdd-supply = <&vdd_5v_io>;
+    };
+};
+
+/*
+ * SPI Configuration
+ * =================
+ */
+
+/* SPI1: Digital I/O expansion */
+&spi1 {
+    status = "okay";
+    spi-max-frequency = <10000000>;
+
+    /* 8-channel digital input (isolated) */
+    digital_input: gpio@0 {
+        compatible = "microchip,mcp23s08";
+        reg = <0>;
+        spi-max-frequency = <10000000>;
+        gpio-controller;
+        #gpio-cells = <2>;
+        microchip,spi-present-mask = <0x01>;
+    };
+
+    /* 8-channel relay output driver */
+    relay_output: gpio@1 {
+        compatible = "microchip,mcp23s08";
+        reg = <1>;
+        spi-max-frequency = <10000000>;
+        gpio-controller;
+        #gpio-cells = <2>;
+        microchip,spi-present-mask = <0x01>;
+    };
+};
+
+/*
+ * RS-485 Serial Ports
+ * ===================
+ */
+
+/* UART1: RS-485 Port 1 (Modbus RTU) */
+&uarta {
+    status = "okay";
+    current-speed = <115200>;
+
+    linux,rs485-enabled-at-boot-time;
+    rs485-rts-active-low;
+    rs485-rx-during-tx;
+};
+
+/* UART2: RS-485 Port 2 (Profibus) */
+&uartb {
+    status = "okay";
+    current-speed = <9600>;
+
+    linux,rs485-enabled-at-boot-time;
+    rs485-rts-active-low;
+};
+
+/* UART3: RS-485 Port 3 */
+&uartc {
+    status = "okay";
+    current-speed = <19200>;
+
+    linux,rs485-enabled-at-boot-time;
+    rs485-rts-active-low;
+};
+
+/* UART4: RS-485 Port 4 */
+&uartd {
+    status = "okay";
+    current-speed = <38400>;
+
+    linux,rs485-enabled-at-boot-time;
+    rs485-rts-active-low;
+};
+
+/*
+ * CAN Bus Configuration
+ * =====================
+ */
+
+/* CAN0: Primary CAN bus (500 kbit/s) */
+&can0 {
+    status = "okay";
+    bus-speed = <500000>;
+
+    can-transceiver {
+        max-bitrate = <5000000>;
+    };
+};
+
+/* CAN1: Secondary CAN bus (250 kbit/s) */
+&can1 {
+    status = "okay";
+    bus-speed = <250000>;
+
+    can-transceiver {
+        max-bitrate = <5000000>;
+    };
+};
+
+/*
+ * Ethernet with TSN
+ * =================
+ */
+
+&mgbe0 {
+    status = "okay";
+    phy-handle = <&ethernet_phy>;
+    phy-mode = "rgmii-id";
+
+    /* Time-Sensitive Networking support */
+    ptp-hardware-clock;
+
+    mdio {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        ethernet_phy: ethernet-phy@1 {
+            reg = <1>;
+            interrupt-parent = <&tegra_main_gpio>;
+            interrupts = <TEGRA234_MAIN_GPIO(G, 4) IRQ_TYPE_LEVEL_LOW>;
+            reset-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(G, 5) GPIO_ACTIVE_LOW>;
+        };
+    };
+};
+
+/*
+ * PCIe for expansion modules
+ * ===========================
+ */
+
+&pcie_c4 {
+    status = "okay";
+    num-lanes = <1>;
+    max-link-speed = <3>;
+};
+
+/*
+ * PWM for variable frequency drives
+ * ==================================
+ */
+
+&pwm0 {
+    status = "okay";
+    #pwm-cells = <2>;
+};
+
+&pwm1 {
+    status = "okay";
+    #pwm-cells = <2>;
+};
+
+&pwm2 {
+    status = "okay";
+    #pwm-cells = <2>;
+};
+
+&pwm3 {
+    status = "okay";
+    #pwm-cells = <2>;
+};
+
+/*
+ * Thermal Management
+ * ==================
+ */
+
+&cpu_thermal {
+    polling-delay-passive = <500>;
+    polling-delay = <1000>;
+
+    trips {
+        cpu_alert: cpu-alert {
+            temperature = <75000>;  /* Conservative for industrial */
+            hysteresis = <2000>;
+            type = "active";
+        };
+
+        cpu_crit: cpu-critical {
+            temperature = <95000>;  /* Lower critical temp */
+            hysteresis = <2000>;
+            type = "critical";
+        };
+    };
+};
+
+/*
+ * Pinmux Configuration
+ * ====================
+ */
+
+&pinmux {
+    pinctrl-names = "default";
+    pinctrl-0 = <&industrial_pinmux>;
+
+    industrial_pinmux: pinmux-industrial {
+        /* RS-485 direction control GPIOs */
+        rs485_1_de {
+            nvidia,pins = "uart1_rts_pr4";
+            nvidia,function = "rts1";
+            nvidia,pull = <0>;
+            nvidia,tristate = <0>;
+        };
+
+        rs485_2_de {
+            nvidia,pins = "uart2_rts_px6";
+            nvidia,function = "rts2";
+            nvidia,pull = <0>;
+            nvidia,tristate = <0>;
+        };
+
+        /* CAN bus pins */
+        can0_tx {
+            nvidia,pins = "can0_dout_paa1";
+            nvidia,function = "can0";
+            nvidia,pull = <0>;
+            nvidia,tristate = <0>;
+        };
+
+        can0_rx {
+            nvidia,pins = "can0_din_paa0";
+            nvidia,function = "can0";
+            nvidia,pull = <2>;  /* Pull-up */
+            nvidia,tristate = <1>;
+        };
+
+        can1_tx {
+            nvidia,pins = "can1_dout_paa3";
+            nvidia,function = "can1";
+            nvidia,pull = <0>;
+            nvidia,tristate = <0>;
+        };
+
+        can1_rx {
+            nvidia,pins = "can1_din_paa2";
+            nvidia,function = "can1";
+            nvidia,pull = <2>;
+            nvidia,tristate = <1>;
+        };
+    };
+};
+
+/*
+ * Usage Notes:
+ * ============
+ *
+ * Digital Inputs (24V isolated):
+ *   cat /sys/class/gpio/gpio*/value
+ *   Configure as inputs with appropriate debouncing
+ *
+ * Relay Outputs:
+ *   echo 1 > /sys/class/gpio/gpio*/value  # Energize relay
+ *   echo 0 > /sys/class/gpio/gpio*/value  # De-energize relay
+ *
+ * Analog Inputs (via ADS1115):
+ *   cat /sys/bus/iio/devices/iio:device0/in_voltage*_raw
+ *   Convert to engineering units based on scaling
+ *
+ * Analog Outputs (via MCP4725):
+ *   echo 2048 > /sys/bus/iio/devices/iio:device1/out_voltage0_raw
+ *   Range: 0-4095 (12-bit)
+ *
+ * CAN Bus:
+ *   ip link set can0 up type can bitrate 500000
+ *   candump can0
+ *   cansend can0 123#DEADBEEF
+ *
+ * RS-485:
+ *   stty -F /dev/ttyTHS0 115200
+ *   echo "command" > /dev/ttyTHS0
+ *
+ * Real-Time Configuration:
+ *   chrt -f 99 ./realtime_app  # Run with real-time priority
+ *   Use isolated CPUs for deterministic behavior
+ *
+ * Watchdog:
+ *   Ensure application kicks watchdog regularly
+ *   Monitor /dev/watchdog
+ */

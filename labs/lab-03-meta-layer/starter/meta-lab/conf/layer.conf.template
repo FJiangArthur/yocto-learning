@@ -1,0 +1,24 @@
+# Layer configuration template for meta-lab
+# TODO: Complete the missing configuration
+
+# Add to BBPATH
+BBPATH .= ":${LAYERDIR}"
+
+# Add recipes to BBFILES
+# TODO: Add pattern to match .bb and .bbappend files
+BBFILES += "TODO"
+
+# Define layer collection name
+BBFILE_COLLECTIONS += "meta-lab"
+
+# Pattern for this layer
+BBFILE_PATTERN_meta-lab = "^${LAYERDIR}/"
+
+# TODO: Set layer priority (recommend: 8)
+BBFILE_PRIORITY_meta-lab = "TODO"
+
+# TODO: Set layer compatibility (kirkstone)
+LAYERSERIES_COMPAT_meta-lab = "TODO"
+
+# TODO: Set layer dependencies
+LAYERDEPENDS_meta-lab = "TODO"

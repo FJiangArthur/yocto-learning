@@ -1,0 +1,411 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Device Tree Overlay: GPIO LED Indicator
+ *
+ * Description: Configure GPIO as LED output using gpio-leds driver
+ *              Provides userspace control and trigger options
+ * Target: NVIDIA Jetson Orin (tegra234)
+ *
+ * Usage:
+ *   1. Compile: dtc -@ -I dts -O dtb -o gpio-led-indicator.dtbo gpio-led-indicator.dtso
+ *   2. Apply: Add to /boot/extlinux/extlinux.conf
+ *      FDTOVERLAYS /boot/overlays/gpio-led-indicator.dtbo
+ *
+ * Hardware Requirements:
+ *   - LED connected to GPIO pin
+ *   - Current-limiting resistor (typically 220-330 ohms for 3.3V)
+ *
+ * Pin Assignments (configurable):
+ *   - Pin 7 (GPIO09): Status LED (Green)
+ *   - Pin 11 (GPIO17): Activity LED (Blue)
+ *   - Pin 13 (GPIO27): Error LED (Red)
+ *
+ * Wiring Example:
+ *   GPIO Pin --> Resistor (330Ω) --> LED Anode (+)
+ *   LED Cathode (-) --> GND
+ *
+ * After loading:
+ *   - LEDs controllable via /sys/class/leds/
+ *   - Trigger support (heartbeat, timer, oneshot, etc.)
+ *   - Brightness control (on/off for regular LEDs, PWM for advanced)
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    /* Compatible string for Jetson Orin platforms */
+    compatible = "nvidia,p3768-0000+p3767-0000", "nvidia,tegra234";
+
+    /*
+     * Fragment 0: Add GPIO LED devices
+     * Uses the gpio-leds driver for easy userspace control
+     */
+    fragment@0 {
+        target-path = "/";
+        __overlay__ {
+            /*
+             * GPIO LEDs node
+             * This creates a platform device that manages multiple LEDs
+             */
+            gpio-leds {
+                compatible = "gpio-leds";
+                status = "okay";
+
+                /*
+                 * Status LED (Green) on Pin 7
+                 * General purpose status indicator
+                 */
+                status-led {
+                    label = "status:green";
+                    /*
+                     * GPIO specification: <&gpio_controller pin flags>
+                     * tegra_main_gpio is the main GPIO controller
+                     * Pin numbers are chip-specific
+                     * GPIO_ACTIVE_HIGH (0) = LED on when GPIO high
+                     */
+                    gpios = <&tegra_main_gpio 9 0>;  /* GPIO09, active high */
+                    default-state = "off";  /* Initial state */
+                    linux,default-trigger = "heartbeat";  /* Blink pattern */
+
+                    /*
+                     * Available triggers:
+                     * - none: Manual control only
+                     * - heartbeat: Double pulse pattern
+                     * - timer: Configurable on/off times
+                     * - oneshot: Single pulse
+                     * - disk-activity: Blink on disk I/O
+                     * - cpu0, cpu1, ...: Blink on CPU activity
+                     * - default-on: Always on
+                     */
+                };
+
+                /*
+                 * Activity LED (Blue) on Pin 11
+                 * Indicates system activity
+                 */
+                activity-led {
+                    label = "activity:blue";
+                    gpios = <&tegra_main_gpio 17 0>;  /* GPIO17, active high */
+                    default-state = "off";
+                    linux,default-trigger = "none";  /* Manual control */
+                };
+
+                /*
+                 * Error LED (Red) on Pin 13
+                 * Indicates error conditions
+                 */
+                error-led {
+                    label = "error:red";
+                    gpios = <&tegra_main_gpio 27 0>;  /* GPIO27, active high */
+                    default-state = "off";
+                    linux,default-trigger = "none";
+
+                    /*
+                     * Optional: Blink on panic
+                     * Uncomment to enable
+                     */
+                    /* panic-indicator; */
+                };
+
+                /*
+                 * Example: Active-low LED
+                 * Some LEDs are common-anode (turn on when GPIO low)
+                 */
+                /*
+                user-led {
+                    label = "user:white";
+                    gpios = <&tegra_main_gpio 32 1>;  // GPIO32, active low (1 = GPIO_ACTIVE_LOW)
+                    default-state = "off";
+                    linux,default-trigger = "default-on";
+                };
+                */
+            };
+        };
+    };
+
+    /*
+     * Fragment 1: Configure pinmux for GPIO09 (Status LED)
+     */
+    fragment@1 {
+        target = <&pinmux>;
+        __overlay__ {
+            gpio09_pin {
+                nvidia,pins = "soc_gpio09_ps1";
+                nvidia,function = "gp";  /* General purpose GPIO */
+                nvidia,pull = <0>;  /* TEGRA_PIN_PULL_NONE */
+                nvidia,tristate = <0>;  /* TEGRA_PIN_DISABLE (output) */
+                nvidia,enable-input = <0>;  /* TEGRA_PIN_DISABLE (output) */
+            };
+        };
+    };
+
+    /*
+     * Fragment 2: Configure pinmux for GPIO17 (Activity LED)
+     */
+    fragment@2 {
+        target = <&pinmux>;
+        __overlay__ {
+            gpio17_pin {
+                nvidia,pins = "soc_gpio17_pq1";
+                nvidia,function = "gp";
+                nvidia,pull = <0>;
+                nvidia,tristate = <0>;
+                nvidia,enable-input = <0>;
+            };
+        };
+    };
+
+    /*
+     * Fragment 3: Configure pinmux for GPIO27 (Error LED)
+     */
+    fragment@3 {
+        target = <&pinmux>;
+        __overlay__ {
+            gpio27_pin {
+                nvidia,pins = "soc_gpio27_pq3";
+                nvidia,function = "gp";
+                nvidia,pull = <0>;
+                nvidia,tristate = <0>;
+                nvidia,enable-input = <0>;
+            };
+        };
+    };
+};
+
+/*
+ * Controlling LEDs:
+ * =================
+ *
+ * 1. List available LEDs:
+ *    ls /sys/class/leds/
+ *    # Shows: status:green, activity:blue, error:red
+ *
+ * 2. Turn LED on:
+ *    echo 1 > /sys/class/leds/status:green/brightness
+ *
+ * 3. Turn LED off:
+ *    echo 0 > /sys/class/leds/status:green/brightness
+ *
+ * 4. Check current brightness:
+ *    cat /sys/class/leds/status:green/brightness
+ *
+ * 5. Set trigger:
+ *    # List available triggers
+ *    cat /sys/class/leds/status:green/trigger
+ *
+ *    # Set heartbeat pattern
+ *    echo heartbeat > /sys/class/leds/status:green/trigger
+ *
+ *    # Set timer trigger
+ *    echo timer > /sys/class/leds/activity:blue/trigger
+ *    echo 500 > /sys/class/leds/activity:blue/delay_on   # ms
+ *    echo 500 > /sys/class/leds/activity:blue/delay_off  # ms
+ *
+ *    # Set CPU activity trigger
+ *    echo cpu0 > /sys/class/leds/activity:blue/trigger
+ *
+ *    # Remove trigger (manual control)
+ *    echo none > /sys/class/leds/status:green/trigger
+ *
+ * 6. Oneshot trigger (single pulse):
+ *    echo oneshot > /sys/class/leds/error:red/trigger
+ *    echo 1 > /sys/class/leds/error:red/shot  # Trigger pulse
+ *
+ * Bash Script Example:
+ * ====================
+ *
+ * #!/bin/bash
+ * # LED control script
+ *
+ * STATUS_LED="/sys/class/leds/status:green"
+ * ACTIVITY_LED="/sys/class/leds/activity:blue"
+ * ERROR_LED="/sys/class/leds/error:red"
+ *
+ * # Initialize - turn all off
+ * echo none > ${STATUS_LED}/trigger
+ * echo none > ${ACTIVITY_LED}/trigger
+ * echo none > ${ERROR_LED}/trigger
+ * echo 0 > ${STATUS_LED}/brightness
+ * echo 0 > ${ACTIVITY_LED}/brightness
+ * echo 0 > ${ERROR_LED}/brightness
+ *
+ * # Indicate startup
+ * echo 1 > ${STATUS_LED}/brightness
+ * sleep 0.5
+ * echo 0 > ${STATUS_LED}/brightness
+ *
+ * # Set heartbeat on status
+ * echo heartbeat > ${STATUS_LED}/trigger
+ *
+ * # Monitor CPU activity
+ * echo cpu0 > ${ACTIVITY_LED}/trigger
+ *
+ * # Error handler
+ * function indicate_error() {
+ *     echo 1 > ${ERROR_LED}/brightness
+ *     echo "Error occurred!"
+ * }
+ *
+ * # Cleanup on exit
+ * function cleanup() {
+ *     echo 0 > ${ERROR_LED}/brightness
+ *     echo none > ${STATUS_LED}/trigger
+ *     echo none > ${ACTIVITY_LED}/trigger
+ * }
+ * trap cleanup EXIT
+ *
+ * Python Example:
+ * ===============
+ *
+ * import time
+ * from pathlib import Path
+ *
+ * class LED:
+ *     def __init__(self, name):
+ *         self.base_path = Path(f"/sys/class/leds/{name}")
+ *         self.brightness_path = self.base_path / "brightness"
+ *         self.trigger_path = self.base_path / "trigger"
+ *
+ *     def on(self):
+ *         self.brightness_path.write_text("1")
+ *
+ *     def off(self):
+ *         self.brightness_path.write_text("0")
+ *
+ *     def toggle(self):
+ *         current = int(self.brightness_path.read_text().strip())
+ *         self.brightness_path.write_text(str(1 - current))
+ *
+ *     def set_trigger(self, trigger):
+ *         self.trigger_path.write_text(trigger)
+ *
+ *     def blink(self, on_time=0.5, off_time=0.5, count=5):
+ *         self.set_trigger("none")
+ *         for _ in range(count):
+ *             self.on()
+ *             time.sleep(on_time)
+ *             self.off()
+ *             time.sleep(off_time)
+ *
+ * # Usage
+ * status_led = LED("status:green")
+ * activity_led = LED("activity:blue")
+ * error_led = LED("error:red")
+ *
+ * # Blink status LED
+ * status_led.blink(0.2, 0.2, 3)
+ *
+ * # Set heartbeat
+ * status_led.set_trigger("heartbeat")
+ *
+ * # Indicate error
+ * error_led.on()
+ * time.sleep(2)
+ * error_led.off()
+ *
+ * C Example:
+ * ==========
+ *
+ * #include <stdio.h>
+ * #include <stdlib.h>
+ * #include <fcntl.h>
+ * #include <unistd.h>
+ * #include <string.h>
+ *
+ * void led_control(const char *led_name, int state) {
+ *     char path[256];
+ *     snprintf(path, sizeof(path), "/sys/class/leds/%s/brightness", led_name);
+ *
+ *     int fd = open(path, O_WRONLY);
+ *     if (fd < 0) {
+ *         perror("Failed to open LED");
+ *         return;
+ *     }
+ *
+ *     const char *value = state ? "1" : "0";
+ *     write(fd, value, strlen(value));
+ *     close(fd);
+ * }
+ *
+ * int main() {
+ *     // Turn on status LED
+ *     led_control("status:green", 1);
+ *     sleep(1);
+ *
+ *     // Turn off status LED
+ *     led_control("status:green", 0);
+ *     sleep(1);
+ *
+ *     // Blink pattern
+ *     for (int i = 0; i < 5; i++) {
+ *         led_control("activity:blue", 1);
+ *         usleep(200000);  // 200ms
+ *         led_control("activity:blue", 0);
+ *         usleep(200000);
+ *     }
+ *
+ *     return 0;
+ * }
+ *
+ * Advanced Triggers:
+ * ==================
+ *
+ * 1. Network activity:
+ *    # Requires network trigger support in kernel
+ *    echo netdev > /sys/class/leds/activity:blue/trigger
+ *    echo eth0 > /sys/class/leds/activity:blue/device_name
+ *    echo 1 > /sys/class/leds/activity:blue/link
+ *    echo 1 > /sys/class/leds/activity:blue/tx
+ *    echo 1 > /sys/class/leds/activity:blue/rx
+ *
+ * 2. GPIO trigger (LED follows another GPIO):
+ *    echo gpio > /sys/class/leds/status:green/trigger
+ *    echo 123 > /sys/class/leds/status:green/gpio
+ *
+ * 3. Transient trigger (auto-off after delay):
+ *    echo transient > /sys/class/leds/error:red/trigger
+ *    echo 1 > /sys/class/leds/error:red/state
+ *    echo 5000 > /sys/class/leds/error:red/duration  # ms
+ *
+ * Troubleshooting:
+ * ================
+ *
+ * 1. LEDs not appearing:
+ *    dmesg | grep -i "gpio.*led"
+ *    dmesg | grep -i leds-gpio
+ *
+ * 2. Check GPIO allocation:
+ *    cat /sys/kernel/debug/gpio
+ *    # Should show GPIOs allocated to "leds-gpio"
+ *
+ * 3. Verify pinmux:
+ *    cat /sys/kernel/debug/pinctrl/2430000.pinmux/pinmux-pins | grep gpio
+ *
+ * 4. Check permissions:
+ *    ls -l /sys/class/leds/*/brightness
+ *    # Ensure writable by user or group
+ *
+ * 5. LED not lighting:
+ *    - Verify GPIO direction (output)
+ *    - Check LED polarity (anode/cathode)
+ *    - Verify current-limiting resistor
+ *    - Test GPIO directly via sysfs
+ *    - Check for active-low vs active-high
+ *
+ * GPIO Pin Reference (Jetson Orin 40-pin):
+ * =========================================
+ *
+ * Pin 7  = GPIO09  = soc_gpio09_ps1
+ * Pin 11 = GPIO17  = soc_gpio17_pq1
+ * Pin 13 = GPIO27  = soc_gpio27_pq3
+ * Pin 15 = GPIO12  = soc_gpio12_ph0
+ * Pin 16 = GPIO08  = soc_gpio08_ps0
+ * Pin 18 = GPIO25  = soc_gpio25_pq2
+ * Pin 22 = GPIO17  = soc_gpio17_pq1
+ * Pin 29 = GPIO05  = soc_gpio05_pr5
+ * Pin 31 = GPIO06  = soc_gpio06_pr6
+ * Pin 32 = GPIO07  = soc_gpio07_pr7
+ * Pin 33 = GPIO13  = soc_gpio13_ph1
+ * Pin 37 = GPIO26  = soc_gpio26_pq5
+ */

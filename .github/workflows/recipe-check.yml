@@ -1,0 +1,392 @@
+# Recipe Validation Workflow
+#
+# This workflow validates BitBake recipes without full builds
+#
+# Features:
+# - Fast syntax checking with bitbake -e
+# - License compliance verification
+# - Recipe parsing validation
+# - Common error detection
+# - SRC_URI accessibility checks
+#
+# Learning objectives:
+# 1. Understand recipe validation strategies
+# 2. Learn common recipe errors and how to catch them
+# 3. Practice CI/CD for recipe development
+# 4. Implement pre-build checks
+
+name: Recipe Validation
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - 'recipes/**/*.bb'
+      - 'recipes/**/*.bbappend'
+      - 'recipes/**/*.inc'
+      - 'meta-layers/**/recipes-*/**/*.bb'
+      - 'meta-layers/**/recipes-*/**/*.bbappend'
+  push:
+    branches:
+      - develop
+    paths:
+      - 'recipes/**/*.bb'
+      - 'recipes/**/*.bbappend'
+  workflow_dispatch:
+
+env:
+  YOCTO_VERSION: kirkstone
+
+jobs:
+  validate-recipes:
+    name: Validate Recipe Syntax
+    runs-on: ubuntu-22.04
+
+    container:
+      image: crops/poky:ubuntu-22.04
+      options: --user root
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup build user
+        run: |
+          useradd -m -s /bin/bash yoctouser || true
+          chown -R yoctouser:yoctouser $GITHUB_WORKSPACE
+
+      - name: Clone Poky
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE
+            git clone -b ${{ env.YOCTO_VERSION }} --depth 1 https://git.yoctoproject.org/git/poky
+          "
+
+      - name: Clone meta-openembedded
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE/poky
+            git clone -b ${{ env.YOCTO_VERSION }} --depth 1 https://github.com/openembedded/meta-openembedded.git
+          "
+
+      - name: Initialize build environment
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE/poky
+            source oe-init-build-env build
+
+            # Add layers
+            bitbake-layers add-layer ../meta-openembedded/meta-oe
+            bitbake-layers add-layer ../meta-openembedded/meta-python
+
+            # Add custom layers if they exist
+            if [ -d '$GITHUB_WORKSPACE/meta-layers' ]; then
+              for layer in $GITHUB_WORKSPACE/meta-layers/meta-*; do
+                if [ -d \"\$layer\" ]; then
+                  bitbake-layers add-layer \"\$layer\" || true
+                fi
+              done
+            fi
+          "
+
+      - name: Get changed recipes
+        id: changed_files
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="HEAD~1"
+            HEAD_SHA="HEAD"
+          fi
+
+          CHANGED_RECIPES=$(git diff --name-only $BASE_SHA $HEAD_SHA | grep -E '\.(bb|bbappend|inc)$' || echo "")
+
+          echo "changed_recipes<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGED_RECIPES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          echo "Changed recipes:"
+          echo "$CHANGED_RECIPES"
+
+      - name: Parse recipes
+        if: steps.changed_files.outputs.changed_recipes != ''
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE/poky/build
+            source ../oe-init-build-env
+
+            FAILED_RECIPES=''
+
+            while IFS= read -r recipe_file; do
+              if [ -z \"\$recipe_file\" ]; then
+                continue
+              fi
+
+              echo \"Checking: \$recipe_file\"
+
+              # Extract recipe name from filename
+              recipe_name=\$(basename \"\$recipe_file\" | sed 's/_[0-9].*//' | sed 's/\\.bb.*//')
+
+              echo \"Recipe name: \$recipe_name\"
+
+              # Try to parse the recipe
+              if bitbake -e \$recipe_name > /dev/null 2>&1; then
+                echo \"✓ \$recipe_name parses successfully\"
+              else
+                echo \"✗ \$recipe_name failed to parse\"
+                FAILED_RECIPES=\"\$FAILED_RECIPES \$recipe_name\"
+              fi
+            done <<< '${{ steps.changed_files.outputs.changed_recipes }}'
+
+            if [ -n \"\$FAILED_RECIPES\" ]; then
+              echo \"Failed recipes: \$FAILED_RECIPES\"
+              exit 1
+            fi
+          "
+
+      - name: Check recipe metadata
+        if: steps.changed_files.outputs.changed_recipes != ''
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE/poky/build
+            source ../oe-init-build-env
+
+            while IFS= read -r recipe_file; do
+              if [ -z \"\$recipe_file\" ] || [ ! -f \"$GITHUB_WORKSPACE/\$recipe_file\" ]; then
+                continue
+              fi
+
+              echo \"Checking metadata for: \$recipe_file\"
+
+              # Check for required fields
+              if ! grep -q '^SUMMARY' \"$GITHUB_WORKSPACE/\$recipe_file\"; then
+                echo \"⚠ Warning: \$recipe_file missing SUMMARY\"
+              fi
+
+              if ! grep -q '^LICENSE' \"$GITHUB_WORKSPACE/\$recipe_file\"; then
+                echo \"✗ Error: \$recipe_file missing LICENSE\"
+                exit 1
+              fi
+
+              if ! grep -q '^LIC_FILES_CHKSUM' \"$GITHUB_WORKSPACE/\$recipe_file\"; then
+                echo \"✗ Error: \$recipe_file missing LIC_FILES_CHKSUM\"
+                exit 1
+              fi
+
+              # Check for common issues
+              if grep -q 'DEPENDS.*virtual/' \"$GITHUB_WORKSPACE/\$recipe_file\"; then
+                echo \"⚠ Warning: \$recipe_file uses virtual/ provider in DEPENDS\"
+              fi
+
+              # Check for hardcoded paths
+              if grep -qE '/usr/|/opt/|/home/' \"$GITHUB_WORKSPACE/\$recipe_file\"; then
+                echo \"⚠ Warning: \$recipe_file may contain hardcoded paths\"
+              fi
+
+              echo \"✓ \$recipe_file metadata check passed\"
+            done <<< '${{ steps.changed_files.outputs.changed_recipes }}'
+          "
+
+      - name: License compliance check
+        if: steps.changed_files.outputs.changed_recipes != ''
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE
+
+            echo \"Checking license compliance...\"
+
+            while IFS= read -r recipe_file; do
+              if [ -z \"\$recipe_file\" ] || [ ! -f \"\$recipe_file\" ]; then
+                continue
+              fi
+
+              echo \"License check for: \$recipe_file\"
+
+              # Extract LICENSE value
+              LICENSE=\$(grep '^LICENSE' \"\$recipe_file\" | head -1 | cut -d'=' -f2- | tr -d '\"' | xargs)
+
+              # Check for CLOSED license (needs justification)
+              if [ \"\$LICENSE\" = \"CLOSED\" ]; then
+                echo \"⚠ Warning: \$recipe_file uses CLOSED license\"
+              fi
+
+              # Check for commercial licenses
+              if echo \"\$LICENSE\" | grep -qiE 'commercial|proprietary'; then
+                echo \"⚠ Warning: \$recipe_file may have commercial license: \$LICENSE\"
+              fi
+
+              # Validate common license identifiers
+              if [ -n \"\$LICENSE\" ]; then
+                echo \"  License: \$LICENSE\"
+              fi
+            done <<< '${{ steps.changed_files.outputs.changed_recipes }}'
+          "
+
+      - name: Validate recipe formatting
+        if: steps.changed_files.outputs.changed_recipes != ''
+        run: |
+          cd $GITHUB_WORKSPACE
+
+          echo "Checking recipe formatting..."
+
+          while IFS= read -r recipe_file; do
+            if [ -z "$recipe_file" ] || [ ! -f "$recipe_file" ]; then
+              continue
+            fi
+
+            echo "Formatting check for: $recipe_file"
+
+            # Check for tabs in variable assignments (should use spaces)
+            if grep -P '^\w+\s*=\t' "$recipe_file"; then
+              echo "⚠ Warning: $recipe_file uses tabs in variable assignments"
+            fi
+
+            # Check for trailing whitespace
+            if grep -q '[[:space:]]$' "$recipe_file"; then
+              echo "⚠ Warning: $recipe_file contains trailing whitespace"
+            fi
+
+            # Check for proper variable override syntax
+            if grep -qE '^[A-Z_]+_append' "$recipe_file"; then
+              echo "⚠ Warning: $recipe_file uses deprecated _append syntax (use :append)"
+            fi
+
+            if grep -qE '^[A-Z_]+_prepend' "$recipe_file"; then
+              echo "⚠ Warning: $recipe_file uses deprecated _prepend syntax (use :prepend)"
+            fi
+
+            if grep -qE '^[A-Z_]+_remove' "$recipe_file"; then
+              echo "⚠ Warning: $recipe_file uses deprecated _remove syntax (use :remove)"
+            fi
+
+            echo "✓ $recipe_file formatting check completed"
+          done <<< '${{ steps.changed_files.outputs.changed_recipes }}'
+
+      - name: Generate validation report
+        if: always()
+        run: |
+          cat > validation-report.md << 'EOF'
+          # Recipe Validation Report
+
+          **Workflow:** ${{ github.workflow }}
+          **Run:** ${{ github.run_number }}
+          **Event:** ${{ github.event_name }}
+          **Branch:** ${{ github.ref_name }}
+
+          ## Changed Recipes
+          ```
+          ${{ steps.changed_files.outputs.changed_recipes }}
+          ```
+
+          ## Validation Results
+          - Syntax Check: ${{ job.status }}
+          - Metadata Check: ${{ job.status }}
+          - License Check: ${{ job.status }}
+          - Formatting Check: ${{ job.status }}
+
+          ## Next Steps
+          ${{ job.status == 'success' && '✓ All checks passed. Ready for full build.' || '✗ Some checks failed. Please review the logs.' }}
+          EOF
+
+          cat validation-report.md
+
+      - name: Comment PR with validation results
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('validation-report.md', 'utf8');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
+
+  lint-recipes:
+    name: Lint Recipe Files
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Lint shell functions in recipes
+        run: |
+          echo "Checking shell functions in recipes..."
+
+          # Find all recipes
+          RECIPE_FILES=$(find . -name "*.bb" -o -name "*.bbappend" -o -name "*.inc" 2>/dev/null)
+
+          for recipe in $RECIPE_FILES; do
+            echo "Linting: $recipe"
+
+            # Extract shell functions and check them
+            # This is a simplified check - real implementation would be more sophisticated
+            if grep -q 'do_.*()' "$recipe"; then
+              echo "  Found shell functions in $recipe"
+            fi
+          done
+
+      - name: Check for common anti-patterns
+        run: |
+          echo "Checking for common anti-patterns..."
+
+          RECIPE_FILES=$(find . -name "*.bb" -o -name "*.bbappend" 2>/dev/null)
+
+          for recipe in $RECIPE_FILES; do
+            # Check for rm -rf without proper guards
+            if grep -q 'rm -rf /' "$recipe"; then
+              echo "⚠ WARNING: $recipe contains dangerous rm -rf command"
+            fi
+
+            # Check for hardcoded versions in SRC_URI
+            if grep -qE 'SRC_URI.*http.*[0-9]+\.[0-9]+\.[0-9]+' "$recipe"; then
+              echo "⚠ WARNING: $recipe may have hardcoded version in SRC_URI"
+            fi
+
+            # Check for missing error handling in functions
+            if grep -q 'do_install()' "$recipe" && ! grep -q 'install -d' "$recipe"; then
+              echo "⚠ INFO: $recipe has do_install but may be missing directory creation"
+            fi
+          done
+
+# Usage examples:
+#
+# 1. This workflow runs automatically on PR creation/update
+#
+# 2. Manual trigger:
+#    - Go to Actions tab
+#    - Select "Recipe Validation" workflow
+#    - Click "Run workflow"
+#
+# 3. Fix common issues:
+#    - Missing LICENSE: Add LICENSE = "MIT" (or appropriate)
+#    - Missing LIC_FILES_CHKSUM: Add checksum of license file
+#    - Deprecated syntax: Change _append to :append
+#    - Trailing whitespace: Configure editor to remove on save
+#
+# 4. Integration with pre-commit:
+#    Add .pre-commit-config.yaml:
+#    ```yaml
+#    repos:
+#      - repo: local
+#        hooks:
+#          - id: validate-recipes
+#            name: Validate BitBake recipes
+#            entry: ./tools/validate-recipes.sh
+#            language: script
+#            files: \.(bb|bbappend)$
+#    ```

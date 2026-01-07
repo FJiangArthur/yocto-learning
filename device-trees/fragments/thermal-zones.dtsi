@@ -1,0 +1,426 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Tegra234 Thermal Zone Configurations
+ *
+ * This file contains thermal management configurations for
+ * NVIDIA Tegra234 (Jetson Orin) platforms including:
+ * - Temperature sensors
+ * - Thermal zones
+ * - Trip points
+ * - Cooling device bindings
+ *
+ * Usage: Include this file in your device tree:
+ *   #include "thermal-zones.dtsi"
+ */
+
+/ {
+    thermal-zones {
+        /*
+         * CPU Thermal Zone
+         * ================
+         * Monitors CPU temperature and activates cooling
+         */
+        cpu_thermal: cpu-thermal {
+            /* Polling interval in milliseconds */
+            polling-delay-passive = <500>;  /* 500ms when trip point exceeded */
+            polling-delay = <1000>;         /* 1000ms normal polling */
+
+            /* Temperature sensor */
+            thermal-sensors = <&{/bpmp/thermal} TEGRA234_THERMAL_ZONE_CPU>;
+
+            /*
+             * Trip Points
+             * Define temperature thresholds and actions
+             */
+            trips {
+                /* Alert level 0: Start light cooling */
+                cpu_alert0: cpu-alert0 {
+                    temperature = <70000>;  /* 70°C in millidegrees */
+                    hysteresis = <2000>;    /* 2°C hysteresis */
+                    type = "active";        /* Active cooling */
+                };
+
+                /* Alert level 1: Increase cooling */
+                cpu_alert1: cpu-alert1 {
+                    temperature = <80000>;  /* 80°C */
+                    hysteresis = <2000>;
+                    type = "active";
+                };
+
+                /* Alert level 2: Maximum cooling */
+                cpu_alert2: cpu-alert2 {
+                    temperature = <90000>;  /* 90°C */
+                    hysteresis = <2000>;
+                    type = "active";
+                };
+
+                /* Passive cooling: Throttle CPU */
+                cpu_passive: cpu-passive {
+                    temperature = <95000>;  /* 95°C */
+                    hysteresis = <2000>;
+                    type = "passive";
+                };
+
+                /* Critical: Emergency shutdown */
+                cpu_crit: cpu-critical {
+                    temperature = <105000>; /* 105°C */
+                    hysteresis = <2000>;
+                    type = "critical";
+                };
+            };
+
+            /*
+             * Cooling Maps
+             * Link trip points to cooling devices
+             */
+            cooling-maps {
+                /* Map 0: Fan at alert0 */
+                map0 {
+                    trip = <&cpu_alert0>;
+                    cooling-device = <&fan 0 1>;
+                    /* Contribution: how much this helps (0-100%) */
+                    contribution = <100>;
+                };
+
+                /* Map 1: Increase fan at alert1 */
+                map1 {
+                    trip = <&cpu_alert1>;
+                    cooling-device = <&fan 1 2>;
+                    contribution = <100>;
+                };
+
+                /* Map 2: Maximum fan at alert2 */
+                map2 {
+                    trip = <&cpu_alert2>;
+                    cooling-device = <&fan 2 3>;
+                    contribution = <100>;
+                };
+
+                /* Map 3: CPU frequency throttling at passive */
+                map3 {
+                    trip = <&cpu_passive>;
+                    cooling-device = <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+                                     <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+                                     <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+                                     <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+                };
+            };
+        };
+
+        /*
+         * GPU Thermal Zone
+         * ================
+         */
+        gpu_thermal: gpu-thermal {
+            polling-delay-passive = <500>;
+            polling-delay = <1000>;
+
+            thermal-sensors = <&{/bpmp/thermal} TEGRA234_THERMAL_ZONE_GPU>;
+
+            trips {
+                gpu_alert0: gpu-alert0 {
+                    temperature = <75000>;  /* 75°C */
+                    hysteresis = <2000>;
+                    type = "active";
+                };
+
+                gpu_alert1: gpu-alert1 {
+                    temperature = <85000>;  /* 85°C */
+                    hysteresis = <2000>;
+                    type = "active";
+                };
+
+                gpu_passive: gpu-passive {
+                    temperature = <95000>;  /* 95°C */
+                    hysteresis = <2000>;
+                    type = "passive";
+                };
+
+                gpu_crit: gpu-critical {
+                    temperature = <105000>; /* 105°C */
+                    hysteresis = <2000>;
+                    type = "critical";
+                };
+            };
+
+            cooling-maps {
+                map0 {
+                    trip = <&gpu_alert0>;
+                    cooling-device = <&fan 0 1>;
+                };
+
+                map1 {
+                    trip = <&gpu_alert1>;
+                    cooling-device = <&fan 1 2>;
+                };
+
+                map2 {
+                    trip = <&gpu_passive>;
+                    cooling-device = <&gpu THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+                };
+            };
+        };
+
+        /*
+         * CV Thermal Zone (Computer Vision)
+         * ==================================
+         */
+        cv_thermal: cv-thermal {
+            polling-delay-passive = <500>;
+            polling-delay = <1000>;
+
+            thermal-sensors = <&{/bpmp/thermal} TEGRA234_THERMAL_ZONE_CV>;
+
+            trips {
+                cv_alert: cv-alert {
+                    temperature = <80000>;  /* 80°C */
+                    hysteresis = <2000>;
+                    type = "active";
+                };
+
+                cv_passive: cv-passive {
+                    temperature = <95000>;  /* 95°C */
+                    hysteresis = <2000>;
+                    type = "passive";
+                };
+
+                cv_crit: cv-critical {
+                    temperature = <105000>; /* 105°C */
+                    hysteresis = <2000>;
+                    type = "critical";
+                };
+            };
+
+            cooling-maps {
+                map0 {
+                    trip = <&cv_alert>;
+                    cooling-device = <&fan 1 2>;
+                };
+            };
+        };
+
+        /*
+         * SOC Thermal Zone
+         * ================
+         * Overall system-on-chip temperature
+         */
+        soc_thermal: soc-thermal {
+            polling-delay-passive = <500>;
+            polling-delay = <1000>;
+
+            thermal-sensors = <&{/bpmp/thermal} TEGRA234_THERMAL_ZONE_SOC>;
+
+            trips {
+                soc_alert: soc-alert {
+                    temperature = <85000>;  /* 85°C */
+                    hysteresis = <2000>;
+                    type = "active";
+                };
+
+                soc_crit: soc-critical {
+                    temperature = <100000>; /* 100°C */
+                    hysteresis = <2000>;
+                    type = "critical";
+                };
+            };
+
+            cooling-maps {
+                map0 {
+                    trip = <&soc_alert>;
+                    cooling-device = <&fan 1 3>;
+                };
+            };
+        };
+
+        /*
+         * Memory Thermal Zone
+         * ===================
+         */
+        mem_thermal: mem-thermal {
+            polling-delay-passive = <500>;
+            polling-delay = <1000>;
+
+            thermal-sensors = <&{/bpmp/thermal} TEGRA234_THERMAL_ZONE_MEM>;
+
+            trips {
+                mem_alert: mem-alert {
+                    temperature = <85000>;  /* 85°C */
+                    hysteresis = <2000>;
+                    type = "active";
+                };
+
+                mem_crit: mem-critical {
+                    temperature = <100000>; /* 100°C */
+                    hysteresis = <2000>;
+                    type = "critical";
+                };
+            };
+
+            cooling-maps {
+                map0 {
+                    trip = <&mem_alert>;
+                    cooling-device = <&fan 1 2>;
+                };
+            };
+        };
+    };
+
+    /*
+     * Cooling Devices
+     * ===============
+     * Define how to cool the system
+     */
+
+    /* CPU frequency scaling as cooling device */
+    cpus {
+        cpu0: cpu@0 {
+            #cooling-cells = <2>; /* min and max cooling state */
+        };
+
+        cpu1: cpu@100 {
+            #cooling-cells = <2>;
+        };
+
+        cpu2: cpu@200 {
+            #cooling-cells = <2>;
+        };
+
+        cpu3: cpu@300 {
+            #cooling-cells = <2>;
+        };
+    };
+
+    /* GPU frequency scaling as cooling device */
+    gpu: gpu@17000000 {
+        #cooling-cells = <2>;
+    };
+
+    /* PWM fan as cooling device */
+    fan: pwm-fan {
+        compatible = "pwm-fan";
+        #cooling-cells = <2>;
+        pwms = <&pwm0 0 40000>;  /* 25kHz PWM */
+        cooling-min-state = <0>;
+        cooling-max-state = <3>;
+        cooling-levels = <0 64 128 192 255>;
+        /*
+         * Cooling states:
+         * 0: Fan off (0%)
+         * 1: Low speed (25%)
+         * 2: Medium speed (50%)
+         * 3: High speed (75%)
+         * 4: Max speed (100%)
+         */
+    };
+};
+
+/*
+ * Monitoring Thermal Status:
+ * ===========================
+ *
+ * 1. List thermal zones:
+ *    ls /sys/class/thermal/thermal_zone*
+ *
+ * 2. Read current temperature:
+ *    cat /sys/class/thermal/thermal_zone0/temp
+ *    # Temperature in millidegrees Celsius
+ *
+ * 3. Read thermal zone type:
+ *    cat /sys/class/thermal/thermal_zone0/type
+ *    # Shows: CPU, GPU, SOC, etc.
+ *
+ * 4. List all temperatures:
+ *    for i in /sys/class/thermal/thermal_zone*; do
+ *        echo -n "$(cat $i/type): "
+ *        echo "scale=2; $(cat $i/temp) / 1000" | bc
+ *    done
+ *
+ * 5. Monitor trip points:
+ *    cat /sys/class/thermal/thermal_zone0/trip_point_*_temp
+ *    cat /sys/class/thermal/thermal_zone0/trip_point_*_type
+ *
+ * 6. Check cooling device state:
+ *    ls /sys/class/thermal/cooling_device*
+ *    cat /sys/class/thermal/cooling_device0/type
+ *    cat /sys/class/thermal/cooling_device0/cur_state
+ *    cat /sys/class/thermal/cooling_device0/max_state
+ *
+ * Python Monitoring Example:
+ * ==========================
+ *
+ * import time
+ * from pathlib import Path
+ *
+ * def read_thermal_zones():
+ *     zones = {}
+ *     thermal_path = Path("/sys/class/thermal")
+ *
+ *     for zone in thermal_path.glob("thermal_zone*"):
+ *         zone_type = (zone / "type").read_text().strip()
+ *         temp_mC = int((zone / "temp").read_text().strip())
+ *         temp_C = temp_mC / 1000.0
+ *         zones[zone_type] = temp_C
+ *
+ *     return zones
+ *
+ * def monitor_temperatures(interval=1, duration=60):
+ *     start = time.time()
+ *     while time.time() - start < duration:
+ *         zones = read_thermal_zones()
+ *         print(f"\n{time.strftime('%H:%M:%S')}")
+ *         for name, temp in sorted(zones.items()):
+ *             print(f"  {name:10s}: {temp:5.1f}°C")
+ *         time.sleep(interval)
+ *
+ * # Monitor for 60 seconds
+ * monitor_temperatures(interval=2, duration=60)
+ *
+ * Thermal Management Commands:
+ * ============================
+ *
+ * 1. Force cooling device state:
+ *    echo 2 > /sys/class/thermal/cooling_device0/cur_state
+ *
+ * 2. Set thermal governor:
+ *    echo step_wise > /sys/class/thermal/thermal_zone0/policy
+ *    # Available: step_wise, fair_share, user_space, power_allocator
+ *
+ * 3. Enable/disable thermal zone:
+ *    echo enabled > /sys/class/thermal/thermal_zone0/mode
+ *    echo disabled > /sys/class/thermal/thermal_zone0/mode
+ *
+ * 4. Check thermal events:
+ *    dmesg | grep -i thermal
+ *
+ * Thermal Optimization:
+ * =====================
+ *
+ * 1. Improve airflow:
+ *    - Use larger heatsink
+ *    - Add active cooling (fan)
+ *    - Ensure proper case ventilation
+ *
+ * 2. Reduce power consumption:
+ *    - Lower CPU/GPU frequencies
+ *    - Disable unused peripherals
+ *    - Use power-efficient code
+ *
+ * 3. Adjust trip points:
+ *    - Lower temperatures = earlier cooling
+ *    - Higher hysteresis = less frequent switching
+ *
+ * 4. Fan curve tuning:
+ *    - Adjust cooling-levels for quieter/faster response
+ *    - Add more intermediate states for smoother control
+ *
+ * Tegra234 Thermal Zones:
+ * ========================
+ *
+ * TEGRA234_THERMAL_ZONE_CPU: CPU cluster
+ * TEGRA234_THERMAL_ZONE_GPU: GPU
+ * TEGRA234_THERMAL_ZONE_CV: Computer vision accelerator
+ * TEGRA234_THERMAL_ZONE_SOC: System-on-chip
+ * TEGRA234_THERMAL_ZONE_MEM: Memory controller
+ * TEGRA234_THERMAL_ZONE_PLLX: PLL X
+ * TEGRA234_THERMAL_ZONE_AUX: Auxiliary
+ */

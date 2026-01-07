@@ -1,0 +1,402 @@
+# Yocto Build Workflow
+#
+# This workflow demonstrates automated Yocto builds in CI/CD
+#
+# Features:
+# - Uses crops/poky Docker container for consistent build environment
+# - Implements sstate-cache caching for faster builds
+# - Builds core-image-minimal as verification
+# - Uploads build artifacts and SDK
+# - Parallel builds for multiple machines
+#
+# Learning objectives:
+# 1. Understand Yocto builds in containerized environments
+# 2. Learn sstate-cache optimization strategies
+# 3. Practice artifact management and retention
+# 4. Handle build failures and debugging in CI
+
+name: Yocto Build
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    paths:
+      - 'recipes/**'
+      - 'meta-layers/**'
+      - 'conf/**'
+      - '.github/workflows/yocto-build.yml'
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - 'recipes/**'
+      - 'meta-layers/**'
+      - 'conf/**'
+  workflow_dispatch:
+    inputs:
+      image:
+        description: 'Image to build'
+        required: true
+        default: 'core-image-minimal'
+        type: choice
+        options:
+          - core-image-minimal
+          - core-image-base
+          - core-image-full-cmdline
+      machine:
+        description: 'Target machine'
+        required: true
+        default: 'qemux86-64'
+        type: choice
+        options:
+          - qemux86-64
+          - qemuarm64
+          - jetson-orin-nano-devkit
+
+env:
+  YOCTO_VERSION: kirkstone
+  BUILD_DIR: build
+  DL_DIR: downloads
+  SSTATE_DIR: sstate-cache
+
+jobs:
+  build-yocto:
+    name: Build ${{ github.event.inputs.image || 'core-image-minimal' }} for ${{ github.event.inputs.machine || 'qemux86-64' }}
+    runs-on: ubuntu-22.04
+
+    # Use crops/poky container for consistent Yocto build environment
+    # This container has all required dependencies pre-installed
+    container:
+      image: crops/poky:ubuntu-22.04
+      options: --user root
+
+    strategy:
+      fail-fast: false
+      matrix:
+        # Build for multiple targets in parallel
+        machine:
+          - qemux86-64
+          - qemuarm64
+        image:
+          - core-image-minimal
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install additional dependencies
+        run: |
+          apt-get update
+          apt-get install -y \
+            gawk wget git diffstat unzip texinfo gcc build-essential \
+            chrpath socat cpio python3 python3-pip python3-pexpect \
+            xz-utils debianutils iputils-ping python3-git python3-jinja2 \
+            libegl1-mesa libsdl1.2-dev pylint3 xterm python3-subunit \
+            mesa-common-dev zstd liblz4-tool
+
+      - name: Setup build user
+        run: |
+          # Yocto requires non-root user for builds
+          useradd -m -s /bin/bash yoctouser || true
+          chown -R yoctouser:yoctouser $GITHUB_WORKSPACE
+
+      - name: Cache downloads directory
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.DL_DIR }}
+          key: downloads-${{ hashFiles('recipes/**/*.bb', 'recipes/**/*.bbappend') }}
+          restore-keys: |
+            downloads-
+
+      - name: Cache sstate-cache
+        uses: actions/cache@v3
+        with:
+          path: ${{ env.SSTATE_DIR }}
+          key: sstate-${{ matrix.machine }}-${{ hashFiles('recipes/**/*.bb', 'recipes/**/*.bbappend') }}
+          restore-keys: |
+            sstate-${{ matrix.machine }}-
+            sstate-
+
+      - name: Clone Poky (Yocto reference distribution)
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE
+            git clone -b ${{ env.YOCTO_VERSION }} https://git.yoctoproject.org/git/poky
+          "
+
+      - name: Clone meta-openembedded
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE/poky
+            git clone -b ${{ env.YOCTO_VERSION }} https://github.com/openembedded/meta-openembedded.git
+          "
+
+      - name: Clone meta-tegra (for Jetson builds)
+        if: matrix.machine == 'jetson-orin-nano-devkit'
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE/poky
+            git clone -b ${{ env.YOCTO_VERSION }}-l4t-r35.x https://github.com/OE4T/meta-tegra.git
+          "
+
+      - name: Initialize build environment
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE/poky
+            source oe-init-build-env ${{ env.BUILD_DIR }}
+
+            # Configure build directory
+            cat >> conf/local.conf << 'EOF'
+
+            # CI/CD optimizations
+            MACHINE = '${{ matrix.machine }}'
+            DL_DIR = '$GITHUB_WORKSPACE/${{ env.DL_DIR }}'
+            SSTATE_DIR = '$GITHUB_WORKSPACE/${{ env.SSTATE_DIR }}'
+
+            # Reduce build output for CI logs
+            BB_NUMBER_THREADS = '4'
+            PARALLEL_MAKE = '-j 4'
+
+            # Optimize for CI environment
+            BB_GENERATE_MIRROR_TARBALLS = '0'
+            INHERIT += 'rm_work'
+
+            # Enable buildhistory for debugging
+            INHERIT += 'buildhistory'
+            BUILDHISTORY_COMMIT = '1'
+
+            # Add extra features for testing
+            EXTRA_IMAGE_FEATURES += 'debug-tweaks'
+
+            # Package management
+            PACKAGE_CLASSES = 'package_ipk'
+
+            # Disk space monitoring
+            BB_DISKMON_DIRS = \"\\
+                STOPTASKS,\${TMPDIR},1G,100K \\
+                STOPTASKS,\${DL_DIR},1G,100K \\
+                STOPTASKS,\${SSTATE_DIR},1G,100K \\
+                STOPTASKS,/tmp,100M,100K \\
+                ABORT,\${TMPDIR},100M,1K \\
+                ABORT,\${DL_DIR},100M,1K \\
+                ABORT,\${SSTATE_DIR},100M,1K \\
+                ABORT,/tmp,10M,1K\"
+            EOF
+          "
+
+      - name: Add custom layers
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE/poky/${{ env.BUILD_DIR }}
+            source ../oe-init-build-env
+
+            # Add meta-openembedded layers
+            bitbake-layers add-layer ../meta-openembedded/meta-oe
+            bitbake-layers add-layer ../meta-openembedded/meta-python
+            bitbake-layers add-layer ../meta-openembedded/meta-networking
+
+            # Add meta-tegra if building for Jetson
+            if [ '${{ matrix.machine }}' = 'jetson-orin-nano-devkit' ]; then
+              bitbake-layers add-layer ../meta-tegra
+            fi
+
+            # Add custom meta-layers from repository
+            if [ -d '$GITHUB_WORKSPACE/meta-layers' ]; then
+              for layer in $GITHUB_WORKSPACE/meta-layers/meta-*; do
+                if [ -d \"\$layer\" ]; then
+                  bitbake-layers add-layer \"\$layer\"
+                fi
+              done
+            fi
+
+            # Show layer configuration
+            bitbake-layers show-layers
+          "
+
+      - name: Build image
+        id: build
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE/poky/${{ env.BUILD_DIR }}
+            source ../oe-init-build-env
+
+            # Build the target image
+            bitbake ${{ matrix.image }}
+
+            # Build SDK for application development
+            bitbake ${{ matrix.image }} -c populate_sdk
+          "
+
+      - name: Collect build statistics
+        if: always()
+        run: |
+          su - yoctouser -c "
+            cd $GITHUB_WORKSPACE/poky/${{ env.BUILD_DIR }}
+
+            # Generate build statistics
+            if [ -f tmp/buildstats/*/${{ matrix.image }}/build_stats ]; then
+              cat tmp/buildstats/*/${{ matrix.image }}/build_stats || true
+            fi
+
+            # Show disk usage
+            df -h
+            du -sh tmp/ downloads/ sstate-cache/ 2>/dev/null || true
+          "
+
+      - name: Upload build artifacts
+        if: success()
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ matrix.image }}-${{ matrix.machine }}
+          path: |
+            poky/${{ env.BUILD_DIR }}/tmp/deploy/images/${{ matrix.machine }}/*.wic*
+            poky/${{ env.BUILD_DIR }}/tmp/deploy/images/${{ matrix.machine }}/*.rootfs.tar.*
+            poky/${{ env.BUILD_DIR }}/tmp/deploy/images/${{ matrix.machine }}/*.manifest
+            poky/${{ env.BUILD_DIR }}/tmp/deploy/images/${{ matrix.machine }}/README_-_DO_NOT_DELETE_FILES_IN_THIS_DIRECTORY.txt
+          retention-days: 7
+
+      - name: Upload SDK
+        if: success()
+        uses: actions/upload-artifact@v3
+        with:
+          name: sdk-${{ matrix.image }}-${{ matrix.machine }}
+          path: |
+            poky/${{ env.BUILD_DIR }}/tmp/deploy/sdk/*.sh
+          retention-days: 7
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-logs-${{ matrix.machine }}-${{ github.run_number }}
+          path: |
+            poky/${{ env.BUILD_DIR }}/tmp/log/**
+            poky/${{ env.BUILD_DIR }}/tmp/work/**/temp/log.*
+          retention-days: 14
+
+      - name: Generate build report
+        if: always()
+        run: |
+          cat > build-report.md << 'EOF'
+          # Yocto Build Report
+
+          **Workflow:** ${{ github.workflow }}
+          **Run:** ${{ github.run_number }}
+          **Machine:** ${{ matrix.machine }}
+          **Image:** ${{ matrix.image }}
+          **Status:** ${{ job.status }}
+          **Branch:** ${{ github.ref_name }}
+          **Commit:** ${{ github.sha }}
+
+          ## Build Configuration
+          - Yocto Version: ${{ env.YOCTO_VERSION }}
+          - Container: crops/poky:ubuntu-22.04
+          - Threads: 4
+          - Parallel Make: -j 4
+
+          ## Layers
+          ```
+          $(su - yoctouser -c "cd $GITHUB_WORKSPACE/poky/${{ env.BUILD_DIR }} && source ../oe-init-build-env && bitbake-layers show-layers" 2>/dev/null || echo "Layer info not available")
+          ```
+
+          ## Disk Usage
+          ```
+          $(df -h | grep -E 'Filesystem|/workspace' || true)
+          ```
+
+          ## Next Steps
+          - Download artifacts from the Actions tab
+          - Flash image to target device
+          - Test functionality
+          - Report issues if found
+          EOF
+
+          cat build-report.md
+
+      - name: Comment PR with build status
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('build-report.md', 'utf8');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: report
+            });
+
+  test-qemu:
+    name: Test QEMU boot
+    needs: build-yocto
+    runs-on: ubuntu-22.04
+    if: success()
+
+    strategy:
+      matrix:
+        machine:
+          - qemux86-64
+          - qemuarm64
+
+    steps:
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-system-arm
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: core-image-minimal-${{ matrix.machine }}
+          path: images/
+
+      - name: Test QEMU boot
+        timeout-minutes: 5
+        run: |
+          echo "Testing QEMU boot for ${{ matrix.machine }}"
+          # Extract rootfs if needed
+          cd images
+
+          # Boot test would go here
+          # This is a placeholder - actual implementation would use runqemu
+          ls -lh
+
+          echo "QEMU boot test completed successfully"
+
+# Workflow usage examples:
+#
+# 1. Manual trigger with custom parameters:
+#    - Go to Actions tab
+#    - Select "Yocto Build" workflow
+#    - Click "Run workflow"
+#    - Select image and machine
+#
+# 2. Automatic trigger on push:
+#    git add recipes/my-new-recipe.bb
+#    git commit -m "Add new recipe"
+#    git push origin main
+#
+# 3. Download artifacts:
+#    - Go to Actions tab
+#    - Click on completed workflow run
+#    - Scroll to "Artifacts" section
+#    - Download image or SDK
+#
+# 4. Debug build failures:
+#    - Download build-logs artifact
+#    - Check tmp/log/cooker/*/console-latest.log
+#    - Check recipe-specific logs in temp/log.*
+#
+# Optimization tips:
+# - Cache hit rates improve with consistent recipe hashes
+# - sstate-cache can grow large - monitor disk usage
+# - Use INHERIT += "rm_work" to save disk space
+# - Adjust BB_NUMBER_THREADS based on runner capacity

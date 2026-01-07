@@ -1,0 +1,29 @@
+# Recipe Template for Hello World Application
+# Fill in the blanks marked with TODO
+
+SUMMARY = "TODO: Add a brief one-line description"
+DESCRIPTION = "TODO: Add a detailed description"
+LICENSE = "TODO: Choose license (MIT, GPLv2, etc.)"
+LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/MIT;md5=0835ade698e0bcf8506ecda2f7b4f302"
+
+# TODO: List source files
+SRC_URI = "file://TODO \
+           file://TODO \
+          "
+
+# Source directory - where extracted files are located
+S = "${WORKDIR}"
+
+# TODO: Implement compilation task
+do_compile() {
+    # Hint: Use oe_runmake for Makefile-based builds
+}
+
+# TODO: Implement installation task
+do_install() {
+    # Hint: Create directory with install -d
+    # Hint: Install binary with install -m 0755
+}
+
+# TODO: Specify which files belong to this package
+FILES:${PN} = "TODO"

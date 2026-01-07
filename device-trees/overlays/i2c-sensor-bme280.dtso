@@ -1,0 +1,328 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Device Tree Overlay: BME280 Temperature/Humidity/Pressure Sensor on I2C
+ *
+ * Description: This overlay adds a Bosch BME280 environmental sensor
+ *              Connected via I2C1 on the 40-pin expansion header
+ * Target: NVIDIA Jetson Orin (tegra234)
+ *
+ * Usage:
+ *   1. Compile: dtc -@ -I dts -O dtb -o i2c-sensor-bme280.dtbo i2c-sensor-bme280.dtso
+ *   2. Apply: Add to /boot/extlinux/extlinux.conf
+ *      FDTOVERLAYS /boot/overlays/i2c-sensor-bme280.dtbo
+ *
+ * Hardware Requirements:
+ *   - Bosch BME280 sensor module
+ *   - Connected to I2C1 on 40-pin header
+ *
+ * Pin Assignments:
+ *   - Pin 3 (GPIO02): I2C1_SDA (Data)
+ *   - Pin 5 (GPIO03): I2C1_SCL (Clock)
+ *   - Pin 1 or 17: 3.3V (Power)
+ *   - Pin 6 or 9: GND (Ground)
+ *
+ * Wiring:
+ *   BME280      Jetson Orin
+ *   ------      -----------
+ *   VCC   ----> 3.3V (Pin 1 or 17)
+ *   GND   ----> GND (Pin 6, 9, 14, 20, 25, 30, 34, 39)
+ *   SCL   ----> I2C1_SCL (Pin 5)
+ *   SDA   ----> I2C1_SDA (Pin 3)
+ *
+ * I2C Address:
+ *   - Default: 0x76 (SDO pin to GND)
+ *   - Alternative: 0x77 (SDO pin to VCC)
+ *
+ * After loading:
+ *   - Device appears in /sys/bus/iio/devices/iio:device0/
+ *   - IIO (Industrial I/O) subsystem provides standard interface
+ *   - Readings available through sysfs attributes
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    /* Compatible string for Jetson Orin platforms */
+    compatible = "nvidia,p3768-0000+p3767-0000", "nvidia,tegra234";
+
+    /*
+     * Fragment 0: Enable I2C1 bus
+     * I2C1 is typically available on the 40-pin header
+     */
+    fragment@0 {
+        target = <&gen1_i2c>;  /* I2C1 generic controller */
+        __overlay__ {
+            /* Enable the I2C bus */
+            status = "okay";
+
+            /* I2C bus properties */
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            /*
+             * Clock frequency: 100 kHz (standard mode)
+             * Can be increased to 400 kHz (fast mode) for better performance
+             * BME280 supports up to 3.4 MHz (high-speed mode)
+             */
+            clock-frequency = <100000>;  /* 100 kHz */
+
+            /*
+             * BME280 sensor device
+             * Address: 0x76 (default, SDO to GND)
+             * Change to 0x77 if SDO is connected to VCC
+             */
+            bme280@76 {
+                /* Compatible string for driver binding */
+                compatible = "bosch,bme280";
+
+                /* I2C address of the device */
+                reg = <0x76>;
+
+                /*
+                 * Sensor-specific properties
+                 * The BME280 driver in Linux uses IIO subsystem
+                 */
+
+                /*
+                 * Optional: Sampling oversampling settings
+                 * Higher values = more accurate but slower
+                 * Values: 1x, 2x, 4x, 8x, 16x
+                 */
+                /* bosch,oversample-temp = <2>; */  /* 2x oversampling */
+                /* bosch,oversample-press = <16>; */  /* 16x oversampling */
+                /* bosch,oversample-humid = <1>; */  /* 1x oversampling */
+
+                /*
+                 * Optional: IIR filter coefficient
+                 * Reduces noise in measurements
+                 * Values: 0 (off), 2, 4, 8, 16
+                 */
+                /* bosch,iir-filter-coeff = <4>; */
+
+                /*
+                 * Optional: Standby time in normal mode
+                 * Time between measurements in ms
+                 * Values: 0.5, 62.5, 125, 250, 500, 1000, 2000, 4000
+                 */
+                /* bosch,standby-time = <1000>; */  /* 1 second */
+
+                /*
+                 * Label for easy identification
+                 */
+                label = "bme280-environmental-sensor";
+            };
+        };
+    };
+
+    /*
+     * Fragment 1: Configure pinmux for I2C1 SDA
+     * Ensures Pin 3 is configured for I2C function
+     */
+    fragment@1 {
+        target = <&pinmux>;
+        __overlay__ {
+            gen1_i2c_sda_pj0 {
+                nvidia,pins = "gen1_i2c_sda_pj0";
+                nvidia,function = "i2c1";
+                nvidia,pull = <0>;  /* TEGRA_PIN_PULL_NONE */
+                nvidia,tristate = <0>;  /* TEGRA_PIN_DISABLE */
+                nvidia,enable-input = <1>;  /* TEGRA_PIN_ENABLE */
+                nvidia,io-high-voltage = <0>;  /* 3.3V */
+                nvidia,lpdr = <0>;  /* TEGRA_PIN_DISABLE */
+            };
+        };
+    };
+
+    /*
+     * Fragment 2: Configure pinmux for I2C1 SCL
+     * Ensures Pin 5 is configured for I2C function
+     */
+    fragment@2 {
+        target = <&pinmux>;
+        __overlay__ {
+            gen1_i2c_scl_pj1 {
+                nvidia,pins = "gen1_i2c_scl_pj1";
+                nvidia,function = "i2c1";
+                nvidia,pull = <0>;  /* TEGRA_PIN_PULL_NONE */
+                nvidia,tristate = <0>;  /* TEGRA_PIN_DISABLE */
+                nvidia,enable-input = <1>;  /* TEGRA_PIN_ENABLE */
+                nvidia,io-high-voltage = <0>;  /* 3.3V */
+                nvidia,lpdr = <0>;  /* TEGRA_PIN_DISABLE */
+            };
+        };
+    };
+};
+
+/*
+ * Reading Sensor Data:
+ * ====================
+ *
+ * The BME280 driver exposes data through the IIO subsystem.
+ * All readings are in standard units.
+ *
+ * 1. Find IIO device:
+ *    ls /sys/bus/iio/devices/
+ *    # Look for iio:device0 (or similar)
+ *
+ *    # Check device name
+ *    cat /sys/bus/iio/devices/iio:device0/name
+ *    # Should show "bme280"
+ *
+ * 2. Read temperature (in millidegrees Celsius):
+ *    cat /sys/bus/iio/devices/iio:device0/in_temp_input
+ *    # Example: 23450 = 23.45°C
+ *
+ * 3. Read humidity (in milli-percent):
+ *    cat /sys/bus/iio/devices/iio:device0/in_humidityrelative_input
+ *    # Example: 45230 = 45.23%
+ *
+ * 4. Read pressure (in kilopascals):
+ *    cat /sys/bus/iio/devices/iio:device0/in_pressure_input
+ *    # Example: 101325 = 101.325 kPa = 1013.25 mbar
+ *
+ * 5. Convenient bash script:
+ *    #!/bin/bash
+ *    IIO_DEVICE="/sys/bus/iio/devices/iio:device0"
+ *
+ *    temp=$(cat ${IIO_DEVICE}/in_temp_input)
+ *    humid=$(cat ${IIO_DEVICE}/in_humidityrelative_input)
+ *    press=$(cat ${IIO_DEVICE}/in_pressure_input)
+ *
+ *    temp_c=$(echo "scale=2; $temp / 1000" | bc)
+ *    humid_pct=$(echo "scale=2; $humid / 1000" | bc)
+ *    press_hpa=$(echo "scale=2; $press / 100" | bc)
+ *
+ *    echo "Temperature: ${temp_c}°C"
+ *    echo "Humidity: ${humid_pct}%"
+ *    echo "Pressure: ${press_hpa} hPa"
+ *
+ * 6. Python example:
+ *    import os
+ *
+ *    def read_bme280():
+ *        iio_path = "/sys/bus/iio/devices/iio:device0"
+ *
+ *        with open(f"{iio_path}/in_temp_input") as f:
+ *            temp = float(f.read()) / 1000  # Convert to °C
+ *
+ *        with open(f"{iio_path}/in_humidityrelative_input") as f:
+ *            humid = float(f.read()) / 1000  # Convert to %
+ *
+ *        with open(f"{iio_path}/in_pressure_input") as f:
+ *            press = float(f.read()) / 100  # Convert to hPa
+ *
+ *        return temp, humid, press
+ *
+ *    temp, humid, press = read_bme280()
+ *    print(f"Temperature: {temp:.2f}°C")
+ *    print(f"Humidity: {humid:.2f}%")
+ *    print(f"Pressure: {press:.2f} hPa")
+ *
+ * 7. Using iio-sensor-proxy (optional):
+ *    # Install if needed
+ *    sudo apt install iio-sensor-proxy
+ *
+ *    # Monitor sensors
+ *    monitor-sensor
+ *
+ * Verification:
+ * =============
+ *
+ * 1. Check I2C bus is enabled:
+ *    ls /dev/i2c-*
+ *    # Should include /dev/i2c-1
+ *
+ * 2. Scan I2C bus for devices:
+ *    sudo i2cdetect -y -r 1
+ *    # Should show device at 0x76 (or 0x77)
+ *    #
+ *    #      0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
+ *    # 00:          -- -- -- -- -- -- -- -- -- -- -- -- --
+ *    # 10: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+ *    # 20: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+ *    # 30: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+ *    # 40: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+ *    # 50: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+ *    # 60: -- -- -- -- -- -- -- -- -- -- -- -- -- -- -- --
+ *    # 70: -- -- -- -- -- -- 76 --
+ *
+ * 3. Check driver binding:
+ *    ls -l /sys/bus/i2c/devices/1-0076/driver
+ *    # Should point to bme280 driver
+ *
+ * 4. Kernel messages:
+ *    dmesg | grep -i bme280
+ *    # Should show successful probe
+ *
+ * 5. Device tree verification:
+ *    cat /sys/firmware/devicetree/base/i2c@3160000/status
+ *    # Should show "okay"
+ *
+ *    ls /sys/firmware/devicetree/base/i2c@3160000/
+ *    # Should include bme280@76 directory
+ *
+ * Troubleshooting:
+ * ================
+ *
+ * 1. Device not detected on I2C bus:
+ *    - Check wiring (especially GND connection)
+ *    - Verify 3.3V power supply
+ *    - Check I2C address (0x76 vs 0x77)
+ *    - Ensure pull-up resistors present (usually on module)
+ *    - Try lower clock frequency (100 kHz)
+ *
+ * 2. Driver not loading:
+ *    # Check if bme280 module is available
+ *    modinfo bme280
+ *    modinfo bme280_i2c
+ *
+ *    # Load manually if needed
+ *    sudo modprobe bme280
+ *    sudo modprobe bme280_i2c
+ *
+ * 3. IIO device not appearing:
+ *    # Check kernel messages for errors
+ *    dmesg | grep -i "iio\|bme280"
+ *
+ *    # Verify driver binding
+ *    cat /sys/bus/i2c/devices/1-0076/modalias
+ *
+ * 4. Incorrect readings:
+ *    - BME280 has factory calibration data
+ *    - Driver should read this automatically
+ *    - If readings seem wrong, check sensor authenticity
+ *    - Some cheap clones may have calibration issues
+ *
+ * 5. I2C bus errors:
+ *    # Check for communication errors
+ *    dmesg | grep -i "i2c.*error"
+ *
+ *    # Reduce bus speed if errors occur
+ *    # Edit overlay: clock-frequency = <100000>;
+ *
+ * Alternative I2C Sensors:
+ * ========================
+ *
+ * This overlay can be modified for other I2C sensors:
+ *
+ * 1. BMP280 (Pressure/Temperature only):
+ *    compatible = "bosch,bmp280";
+ *    reg = <0x76>;
+ *
+ * 2. BME680 (Gas sensor + BME280):
+ *    compatible = "bosch,bme680";
+ *    reg = <0x76>;
+ *
+ * 3. SHT3x (Temperature/Humidity):
+ *    compatible = "sensirion,sht31";
+ *    reg = <0x44>;
+ *
+ * 4. AHT20 (Temperature/Humidity):
+ *    compatible = "aosong,aht20";
+ *    reg = <0x38>;
+ *
+ * 5. LM75 (Temperature):
+ *    compatible = "national,lm75";
+ *    reg = <0x48>;
+ */

@@ -1,0 +1,535 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Custom Jetson Orin Carrier Board Device Tree
+ *
+ * This is a complete device tree example for a custom carrier board
+ * based on NVIDIA Jetson Orin module.
+ *
+ * Features:
+ * - 4x UARTs (Debug console, GPS, Telemetry, Modem)
+ * - 3x I2C buses (Sensors, Display, PMU)
+ * - 2x SPI buses (Display, Flash storage)
+ * - 1x CAN bus (Vehicle/Industrial communication)
+ * - 2x PCIe (NVMe storage, WiFi/BT module)
+ * - USB 3.0 host and device
+ * - Gigabit Ethernet
+ * - MIPI CSI camera
+ * - GPIOs for system control
+ * - Power management
+ * - Thermal management
+ *
+ * Compilation:
+ *   dtc -I dts -O dtb -o custom-carrier-board.dtb custom-carrier-board.dts
+ */
+
+/dts-v1/;
+
+#include <dt-bindings/clock/tegra234-clock.h>
+#include <dt-bindings/gpio/tegra234-gpio.h>
+#include <dt-bindings/interrupt-controller/arm-gic.h>
+
+/ {
+    model = "Custom Jetson Orin Carrier Board";
+    compatible = "custom,jetson-orin-carrier", "nvidia,p3768-0000+p3767-0000", "nvidia,tegra234";
+
+    #address-cells = <2>;
+    #size-cells = <2>;
+
+    chosen {
+        bootargs = "console=ttyTCU0,115200 earlycon=tegra_comb_uart,mmio32,0x0c168000";
+        stdout-path = "serial0:115200n8";
+    };
+
+    memory@80000000 {
+        device_type = "memory";
+        reg = <0x0 0x80000000 0x0 0x200000000>;  /* 8GB */
+    };
+
+    /*
+     * Fixed Regulators
+     * ================
+     */
+    regulators {
+        compatible = "simple-bus";
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        vdd_3v3_sys: regulator@0 {
+            compatible = "regulator-fixed";
+            reg = <0>;
+            regulator-name = "VDD_3V3_SYS";
+            regulator-min-microvolt = <3300000>;
+            regulator-max-microvolt = <3300000>;
+            regulator-always-on;
+            regulator-boot-on;
+        };
+
+        vdd_5v0_sys: regulator@1 {
+            compatible = "regulator-fixed";
+            reg = <1>;
+            regulator-name = "VDD_5V0_SYS";
+            regulator-min-microvolt = <5000000>;
+            regulator-max-microvolt = <5000000>;
+            regulator-always-on;
+            regulator-boot-on;
+        };
+
+        vdd_12v0_sys: regulator@2 {
+            compatible = "regulator-fixed";
+            reg = <2>;
+            regulator-name = "VDD_12V0_SYS";
+            regulator-min-microvolt = <12000000>;
+            regulator-max-microvolt = <12000000>;
+            regulator-always-on;
+            regulator-boot-on;
+        };
+    };
+
+    /*
+     * LEDs
+     * ====
+     */
+    gpio-leds {
+        compatible = "gpio-leds";
+
+        power-led {
+            label = "power:green";
+            gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(N, 0) 0>;
+            default-state = "on";
+            linux,default-trigger = "default-on";
+        };
+
+        status-led {
+            label = "status:blue";
+            gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(N, 1) 0>;
+            default-state = "off";
+            linux,default-trigger = "heartbeat";
+        };
+
+        error-led {
+            label = "error:red";
+            gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(N, 2) 0>;
+            default-state = "off";
+            linux,default-trigger = "none";
+        };
+    };
+
+    /*
+     * Buttons
+     * =======
+     */
+    gpio-keys {
+        compatible = "gpio-keys";
+
+        power-button {
+            label = "Power Button";
+            gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(P, 0) 1>;  /* Active low */
+            linux,code = <116>;  /* KEY_POWER */
+            debounce-interval = <10>;
+            wakeup-source;
+        };
+
+        reset-button {
+            label = "Reset Button";
+            gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(P, 1) 1>;
+            linux,code = <408>;  /* KEY_RESTART */
+            debounce-interval = <10>;
+        };
+    };
+
+    /*
+     * Fan Control
+     * ===========
+     */
+    pwm-fan {
+        compatible = "pwm-fan";
+        pwms = <&pwm7 0 40000>;
+        cooling-min-state = <0>;
+        cooling-max-state = <4>;
+        cooling-levels = <0 64 128 192 255>;
+        #cooling-cells = <2>;
+    };
+};
+
+/*
+ * UART Configuration
+ * ==================
+ */
+
+/* UART1: Debug Console */
+&uarta {
+    status = "okay";
+    current-speed = <115200>;
+};
+
+/* UART2: GPS Module */
+&uartb {
+    status = "okay";
+    current-speed = <9600>;
+
+    gps {
+        compatible = "u-blox,neo-6m";
+        current-speed = <9600>;
+    };
+};
+
+/* UART3: Telemetry */
+&uartc {
+    status = "okay";
+    current-speed = <57600>;
+};
+
+/* UART4: Modem */
+&uartd {
+    status = "okay";
+    current-speed = <115200>;
+    nvidia,enable-hw-flow-control;
+};
+
+/*
+ * I2C Configuration
+ * =================
+ */
+
+/* I2C1: System Sensors */
+&gen1_i2c {
+    status = "okay";
+    clock-frequency = <400000>;
+
+    /* Temperature/Humidity Sensor */
+    bme280@76 {
+        compatible = "bosch,bme280";
+        reg = <0x76>;
+    };
+
+    /* IMU (Inertial Measurement Unit) */
+    mpu6050@68 {
+        compatible = "invensense,mpu6050";
+        reg = <0x68>;
+        interrupt-parent = <&tegra_main_gpio>;
+        interrupts = <TEGRA234_MAIN_GPIO(H, 0) IRQ_TYPE_EDGE_RISING>;
+    };
+
+    /* RTC (Real-Time Clock) */
+    rtc@51 {
+        compatible = "nxp,pcf8563";
+        reg = <0x51>;
+    };
+};
+
+/* I2C2: Display */
+&gen2_i2c {
+    status = "okay";
+    clock-frequency = <100000>;
+
+    /* Touchscreen Controller */
+    touchscreen@38 {
+        compatible = "edt,edt-ft5406";
+        reg = <0x38>;
+        interrupt-parent = <&tegra_main_gpio>;
+        interrupts = <TEGRA234_MAIN_GPIO(H, 1) IRQ_TYPE_EDGE_FALLING>;
+    };
+};
+
+/* I2C8: PMU (Power Management Unit) */
+&i2c_pmc {
+    status = "okay";
+
+    /* Power Monitor */
+    ina3221@40 {
+        compatible = "ti,ina3221";
+        reg = <0x40>;
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        input@0 {
+            reg = <0>;
+            label = "VDD_IN";
+            shunt-resistor-micro-ohms = <5000>;
+        };
+
+        input@1 {
+            reg = <1>;
+            label = "VDD_CPU";
+            shunt-resistor-micro-ohms = <5000>;
+        };
+
+        input@2 {
+            reg = <2>;
+            label = "VDD_GPU";
+            shunt-resistor-micro-ohms = <5000>;
+        };
+    };
+};
+
+/*
+ * SPI Configuration
+ * =================
+ */
+
+/* SPI1: Display */
+&spi1 {
+    status = "okay";
+    spi-max-frequency = <25000000>;
+
+    display@0 {
+        compatible = "ilitek,ili9341";
+        reg = <0>;
+        spi-max-frequency = <10000000>;
+        dc-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(Z, 0) 0>;
+        reset-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(Z, 1) 0>;
+        rotation = <0>;
+    };
+};
+
+/* SPI2: Flash Storage */
+&spi2 {
+    status = "okay";
+    spi-max-frequency = <50000000>;
+
+    flash@0 {
+        compatible = "jedec,spi-nor";
+        reg = <0>;
+        spi-max-frequency = <25000000>;
+        m25p,fast-read;
+
+        partitions {
+            compatible = "fixed-partitions";
+            #address-cells = <1>;
+            #size-cells = <1>;
+
+            bootloader@0 {
+                label = "bootloader";
+                reg = <0x0 0x100000>;
+                read-only;
+            };
+
+            config@100000 {
+                label = "config";
+                reg = <0x100000 0x100000>;
+            };
+
+            data@200000 {
+                label = "data";
+                reg = <0x200000 0xe00000>;
+            };
+        };
+    };
+};
+
+/*
+ * CAN Bus Configuration
+ * =====================
+ */
+
+&can0 {
+    status = "okay";
+    bus-speed = <500000>;  /* 500 kbit/s */
+};
+
+/*
+ * PCIe Configuration
+ * ==================
+ */
+
+/* PCIe C5: NVMe Storage */
+&pcie_c5 {
+    status = "okay";
+    num-lanes = <4>;
+    max-link-speed = <4>;  /* Gen4 */
+    power-domains = <&bpmp TEGRA234_POWER_DOMAIN_PCIEX4A>;
+};
+
+/* PCIe C4: WiFi/BT Module */
+&pcie_c4 {
+    status = "okay";
+    num-lanes = <1>;
+    max-link-speed = <3>;  /* Gen3 */
+    power-domains = <&bpmp TEGRA234_POWER_DOMAIN_PCIEX1A>;
+};
+
+/*
+ * USB Configuration
+ * =================
+ */
+
+&xusb_padctl {
+    status = "okay";
+};
+
+&tegra_xudc {
+    status = "okay";
+};
+
+&tegra_xhci {
+    status = "okay";
+};
+
+/*
+ * Ethernet Configuration
+ * ======================
+ */
+
+&mgbe0 {
+    status = "okay";
+    phy-handle = <&mgbe0_phy>;
+    phy-mode = "rgmii-id";
+
+    mdio {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        mgbe0_phy: ethernet-phy@0 {
+            reg = <0>;
+            interrupt-parent = <&tegra_main_gpio>;
+            interrupts = <TEGRA234_MAIN_GPIO(G, 4) IRQ_TYPE_LEVEL_LOW>;
+            reset-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(G, 5) GPIO_ACTIVE_LOW>;
+            reset-assert-us = <10000>;
+            reset-deassert-us = <50000>;
+        };
+    };
+};
+
+/*
+ * Camera Configuration
+ * ====================
+ */
+
+&cam_i2c {
+    status = "okay";
+
+    imx219@10 {
+        compatible = "sony,imx219";
+        reg = <0x10>;
+
+        clocks = <&bpmp_clks TEGRA234_CLK_EXTPERIPH1>;
+        clock-names = "extperiph1";
+        mclk = "extperiph1";
+        clock-frequency = <24000000>;
+
+        reset-gpios = <&tegra_main_gpio TEGRA234_MAIN_GPIO(H, 3) 0>;
+
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@0 {
+                reg = <0>;
+                imx219_out0: endpoint {
+                    port-index = <0>;
+                    bus-width = <2>;
+                    remote-endpoint = <&csi_in0>;
+                };
+            };
+        };
+    };
+};
+
+&nvcsi {
+    status = "okay";
+    num-channels = <1>;
+
+    channel@0 {
+        reg = <0>;
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@0 {
+                reg = <0>;
+                csi_in0: endpoint@0 {
+                    port-index = <0>;
+                    bus-width = <2>;
+                    remote-endpoint = <&imx219_out0>;
+                };
+            };
+
+            port@1 {
+                reg = <1>;
+                csi_out0: endpoint@1 {
+                    remote-endpoint = <&vi_in0>;
+                };
+            };
+        };
+    };
+};
+
+&vi0 {
+    status = "okay";
+    num-channels = <1>;
+
+    channel@0 {
+        reg = <0>;
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@0 {
+                reg = <0>;
+                vi_in0: endpoint {
+                    port-index = <0>;
+                    bus-width = <2>;
+                    remote-endpoint = <&csi_out0>;
+                };
+            };
+        };
+    };
+};
+
+/*
+ * PWM Configuration
+ * =================
+ */
+
+&pwm7 {
+    status = "okay";
+    #pwm-cells = <2>;
+};
+
+/*
+ * Thermal Management
+ * ==================
+ */
+
+&cpu_thermal {
+    polling-delay-passive = <500>;
+    polling-delay = <1000>;
+
+    trips {
+        cpu_alert: cpu-alert {
+            temperature = <80000>;
+            hysteresis = <2000>;
+            type = "active";
+        };
+
+        cpu_crit: cpu-critical {
+            temperature = <105000>;
+            hysteresis = <2000>;
+            type = "critical";
+        };
+    };
+
+    cooling-maps {
+        map0 {
+            trip = <&cpu_alert>;
+            cooling-device = <&pwm_fan 0 4>;
+        };
+    };
+};
+
+/*
+ * Pinmux Configuration
+ * ====================
+ * Detailed pinmux is typically included from separate file
+ * or defined in base tegra234.dtsi
+ */
+
+&pinmux {
+    pinctrl-names = "default";
+    pinctrl-0 = <&state_default>;
+
+    state_default: pinmux-default {
+        /* GPIO configurations would go here */
+        /* Typically included from jetson-orin-pinmux.dtsi */
+    };
+};

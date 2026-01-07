@@ -1,0 +1,209 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Device Tree Overlay: Enable UART2 on Jetson Orin
+ *
+ * Description: This overlay enables UART2 (UARTB) on the 40-pin expansion header
+ *              Configures baud rate, flow control, and pinmux settings
+ * Target: NVIDIA Jetson Orin (tegra234)
+ *
+ * Usage:
+ *   1. Compile: dtc -@ -I dts -O dtb -o enable-uart2.dtbo enable-uart2.dtso
+ *   2. Apply: Add to /boot/extlinux/extlinux.conf
+ *      FDTOVERLAYS /boot/overlays/enable-uart2.dtbo
+ *
+ * Hardware Requirements:
+ *   - Jetson Orin 40-pin header
+ *   - Connect TX/RX lines to external UART device
+ *
+ * Pin Assignments:
+ *   - Pin 8  (GPIO17): UART2_TX (Transmit)
+ *   - Pin 10 (GPIO18): UART2_RX (Receive)
+ *   - Pin 11 (GPIO11): UART2_RTS (Request To Send) - Optional
+ *   - Pin 36 (GPIO12): UART2_CTS (Clear To Send) - Optional
+ *
+ * After loading:
+ *   - Device appears as /dev/ttyTHS1
+ *   - Default baud rate: 115200
+ *   - Hardware flow control: Disabled (can be enabled)
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    /* Compatible string for Jetson Orin platforms */
+    compatible = "nvidia,p3768-0000+p3767-0000", "nvidia,tegra234";
+
+    /*
+     * Fragment 0: Configure pinmux for UART2 TX
+     * Sets GPIO17 (Pin 8) to UART2_TX function
+     */
+    fragment@0 {
+        target = <&pinmux>;
+        __overlay__ {
+            uart2_tx_px4 {
+                nvidia,pins = "uart2_tx_px4";
+                nvidia,function = "uartb";
+                nvidia,pull = <0>;  /* TEGRA_PIN_PULL_NONE */
+                nvidia,tristate = <0>;  /* TEGRA_PIN_DISABLE */
+                nvidia,enable-input = <0>;  /* TEGRA_PIN_DISABLE */
+                nvidia,io-high-voltage = <0>;  /* TEGRA_PIN_DISABLE */
+                nvidia,lpdr = <0>;  /* TEGRA_PIN_DISABLE */
+            };
+        };
+    };
+
+    /*
+     * Fragment 1: Configure pinmux for UART2 RX
+     * Sets GPIO18 (Pin 10) to UART2_RX function
+     */
+    fragment@1 {
+        target = <&pinmux>;
+        __overlay__ {
+            uart2_rx_px5 {
+                nvidia,pins = "uart2_rx_px5";
+                nvidia,function = "uartb";
+                nvidia,pull = <2>;  /* TEGRA_PIN_PULL_UP */
+                nvidia,tristate = <1>;  /* TEGRA_PIN_ENABLE */
+                nvidia,enable-input = <1>;  /* TEGRA_PIN_ENABLE */
+                nvidia,io-high-voltage = <0>;  /* TEGRA_PIN_DISABLE */
+                nvidia,lpdr = <0>;  /* TEGRA_PIN_DISABLE */
+            };
+        };
+    };
+
+    /*
+     * Fragment 2 (Optional): Configure pinmux for UART2 RTS
+     * Uncomment if hardware flow control is needed
+     */
+    /*
+    fragment@2 {
+        target = <&pinmux>;
+        __overlay__ {
+            uart2_rts_px6 {
+                nvidia,pins = "uart2_rts_px6";
+                nvidia,function = "uartb";
+                nvidia,pull = <0>;
+                nvidia,tristate = <0>;
+                nvidia,enable-input = <0>;
+            };
+        };
+    };
+    */
+
+    /*
+     * Fragment 3 (Optional): Configure pinmux for UART2 CTS
+     * Uncomment if hardware flow control is needed
+     */
+    /*
+    fragment@3 {
+        target = <&pinmux>;
+        __overlay__ {
+            uart2_cts_px7 {
+                nvidia,pins = "uart2_cts_px7";
+                nvidia,function = "uartb";
+                nvidia,pull = <2>;
+                nvidia,tristate = <1>;
+                nvidia,enable-input = <1>;
+            };
+        };
+    };
+    */
+
+    /*
+     * Fragment 4: Enable and configure UART2 controller
+     * This is the main UART device configuration
+     */
+    fragment@4 {
+        target = <&uartb>;
+        __overlay__ {
+            /* Enable the UART device */
+            status = "okay";
+
+            /* UART configuration properties */
+            current-speed = <115200>;  /* Baud rate: 115200 bps */
+
+            /*
+             * Hardware flow control: disabled by default
+             * Uncomment to enable RTS/CTS flow control
+             */
+            /* nvidia,enable-hw-flow-control; */
+
+            /*
+             * Modem control disabled (not a modem interface)
+             */
+            /* nvidia,enable-modem-interrupt; */
+
+            /*
+             * FIFO configuration
+             * Larger FIFOs help with high-speed communication
+             */
+            nvidia,rx-fifo-trigger = <1>;  /* Trigger RX interrupt at 1 byte */
+
+            /*
+             * Compatible string for driver matching
+             * The kernel will match this to the tegra-uart driver
+             */
+            compatible = "nvidia,tegra234-uart", "nvidia,tegra20-uart";
+
+            /*
+             * Label for easy reference in other overlays
+             */
+            label = "uart2";
+        };
+    };
+};
+
+/*
+ * Testing the UART:
+ * =================
+ *
+ * 1. Check device exists:
+ *    ls -l /dev/ttyTHS1
+ *
+ * 2. Test loopback (connect TX to RX):
+ *    # Terminal 1 - receive
+ *    cat /dev/ttyTHS1
+ *
+ *    # Terminal 2 - send
+ *    echo "Hello UART" > /dev/ttyTHS1
+ *
+ * 3. Configure with stty:
+ *    stty -F /dev/ttyTHS1 115200 cs8 -cstopb -parenb
+ *
+ *    # Show configuration
+ *    stty -F /dev/ttyTHS1 -a
+ *
+ * 4. Use minicom:
+ *    minicom -D /dev/ttyTHS1 -b 115200
+ *
+ * 5. Python example:
+ *    import serial
+ *    ser = serial.Serial('/dev/ttyTHS1', 115200, timeout=1)
+ *    ser.write(b'Hello\n')
+ *    response = ser.readline()
+ *    ser.close()
+ *
+ * Troubleshooting:
+ * ===============
+ *
+ * 1. Device not appearing:
+ *    dmesg | grep -i uart
+ *    dmesg | grep ttyTHS
+ *
+ * 2. Check pinmux configuration:
+ *    cat /sys/kernel/debug/pinctrl/2430000.pinmux/pinmux-pins | grep uart2
+ *
+ * 3. Verify UART is enabled:
+ *    cat /sys/firmware/devicetree/base/serial@3110000/status
+ *    # Should show "okay"
+ *
+ * 4. Check permissions:
+ *    sudo chmod 666 /dev/ttyTHS1
+ *    # Or add user to dialout group
+ *    sudo usermod -a -G dialout $USER
+ *
+ * 5. Check for conflicts:
+ *    # Ensure no other service is using the UART
+ *    lsof /dev/ttyTHS1
+ */

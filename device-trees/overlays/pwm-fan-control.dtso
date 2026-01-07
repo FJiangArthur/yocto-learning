@@ -1,0 +1,180 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Device Tree Overlay: PWM Fan Control with Thermal Management
+ *
+ * Description: Configure PWM for fan control with thermal zone binding
+ *              Automatically adjusts fan speed based on temperature
+ * Target: NVIDIA Jetson Orin (tegra234)
+ *
+ * Usage:
+ *   1. Compile: dtc -@ -I dts -O dtb -o pwm-fan-control.dtbo pwm-fan-control.dtso
+ *   2. Apply: Add to /boot/extlinux/extlinux.conf
+ *
+ * Hardware Requirements:
+ *   - PWM-controlled fan (3-pin or 4-pin)
+ *   - Fan power: 5V or 12V (from appropriate power supply)
+ *   - PWM signal: 3.3V logic (from Jetson GPIO)
+ *
+ * Pin Assignment:
+ *   - Pin 32 (GPIO07): PWM0 output to fan PWM input
+ *   - Fan power: Connect to 5V/12V (NOT from Jetson GPIO)
+ *   - Fan GND: Connect to common ground
+ *
+ * After loading:
+ *   - Fan speed controlled by thermal zone
+ *   - Manual control via /sys/class/hwmon/
+ *   - Configurable temperature thresholds
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+    compatible = "nvidia,p3768-0000+p3767-0000", "nvidia,tegra234";
+
+    /* Fragment 0: Configure pinmux for PWM */
+    fragment@0 {
+        target = <&pinmux>;
+        __overlay__ {
+            pwm0_pin {
+                nvidia,pins = "soc_gpio07_pr7";
+                nvidia,function = "gp";
+                nvidia,pull = <0>;  /* No pull */
+                nvidia,tristate = <0>;  /* Output */
+                nvidia,enable-input = <0>;
+            };
+        };
+    };
+
+    /* Fragment 1: Enable PWM controller */
+    fragment@1 {
+        target = <&pwm0>;
+        __overlay__ {
+            status = "okay";
+            #pwm-cells = <2>;
+        };
+    };
+
+    /* Fragment 2: Add PWM fan device */
+    fragment@2 {
+        target-path = "/";
+        __overlay__ {
+            pwm-fan {
+                compatible = "pwm-fan";
+                pwms = <&pwm0 0 40000>;  /* PWM channel 0, 40000ns period (25kHz) */
+                cooling-min-state = <0>;
+                cooling-max-state = <3>;
+
+                /*
+                 * Cooling states define fan speed levels
+                 * Value is PWM duty cycle (0-255)
+                 */
+                cooling-levels = <0 64 128 192 255>;
+                /*
+                 * Level 0: Fan off (0% duty cycle)
+                 * Level 1: 25% speed (64/255)
+                 * Level 2: 50% speed (128/255)
+                 * Level 3: 75% speed (192/255)
+                 * Level 4: 100% speed (255/255)
+                 */
+
+                #cooling-cells = <2>;
+            };
+        };
+    };
+
+    /* Fragment 3: Bind fan to CPU thermal zone */
+    fragment@3 {
+        target = <&cpu_thermal>;
+        __overlay__ {
+            cooling-maps {
+                map0 {
+                    trip = <&cpu_alert0>;
+                    cooling-device = <&pwm_fan 0 1>;  /* Activate level 0-1 */
+                };
+                map1 {
+                    trip = <&cpu_alert1>;
+                    cooling-device = <&pwm_fan 1 2>;  /* Activate level 1-2 */
+                };
+                map2 {
+                    trip = <&cpu_alert2>;
+                    cooling-device = <&pwm_fan 2 3>;  /* Activate level 2-3 */
+                };
+                map3 {
+                    trip = <&cpu_crit>;
+                    cooling-device = <&pwm_fan 3 3>;  /* Max cooling */
+                };
+            };
+        };
+    };
+};
+
+/*
+ * Manual Fan Control:
+ * ===================
+ *
+ * 1. Find hwmon device:
+ *    ls /sys/class/hwmon/
+ *    cat /sys/class/hwmon/hwmon*/name
+ *    # Look for "pwm-fan"
+ *
+ * 2. Set fan speed manually (0-255):
+ *    echo 128 > /sys/class/hwmon/hwmon0/pwm1
+ *    # 0 = off, 255 = full speed
+ *
+ * 3. Enable automatic control:
+ *    echo 2 > /sys/class/hwmon/hwmon0/pwm1_enable
+ *    # 0 = full speed, 1 = manual, 2 = automatic
+ *
+ * 4. Read current speed:
+ *    cat /sys/class/hwmon/hwmon0/pwm1
+ *
+ * 5. Check temperature:
+ *    cat /sys/class/thermal/thermal_zone*/temp
+ *
+ * Python Example:
+ * ===============
+ *
+ * import time
+ * from pathlib import Path
+ *
+ * class PWMFan:
+ *     def __init__(self, hwmon_path="/sys/class/hwmon/hwmon0"):
+ *         self.base = Path(hwmon_path)
+ *         self.pwm_path = self.base / "pwm1"
+ *         self.enable_path = self.base / "pwm1_enable"
+ *
+ *     def set_speed(self, speed):
+ *         # speed: 0-100 (percentage)
+ *         pwm_value = int(speed * 2.55)
+ *         self.enable_path.write_text("1")  # Manual mode
+ *         self.pwm_path.write_text(str(pwm_value))
+ *
+ *     def set_auto(self):
+ *         self.enable_path.write_text("2")  # Automatic mode
+ *
+ *     def get_speed(self):
+ *         pwm = int(self.pwm_path.read_text().strip())
+ *         return int(pwm / 2.55)
+ *
+ * fan = PWMFan()
+ * fan.set_speed(50)  # 50% speed
+ * time.sleep(5)
+ * fan.set_auto()  # Return to automatic
+ *
+ * Troubleshooting:
+ * ================
+ *
+ * 1. Fan not spinning:
+ *    - Check power supply voltage
+ *    - Verify PWM frequency (some fans need 25kHz)
+ *    - Test with 100% duty cycle first
+ *
+ * 2. PWM not working:
+ *    dmesg | grep pwm
+ *    cat /sys/kernel/debug/pwm
+ *
+ * 3. Thermal binding not working:
+ *    cat /sys/class/thermal/cooling_device*/type
+ *    # Should include "pwm-fan"
+ */

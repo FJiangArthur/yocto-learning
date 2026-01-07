@@ -1,0 +1,20 @@
+# Makefile Template for Hello World
+# TODO: Complete the missing parts
+
+# Cross-compilation support
+CC = $(CROSS_COMPILE)gcc
+CFLAGS = -Wall -O2
+TARGET = hello-world
+
+all: $(TARGET)
+
+# TODO: Add compilation rule
+$(TARGET): hello-world.c
+	# Hint: $(CC) $(CFLAGS) -o $(TARGET) hello-world.c
+
+clean:
+	# TODO: Remove built files
+
+# TODO: Add install target
+install:
+	# Hint: Use install command with $(DESTDIR)$(bindir)
